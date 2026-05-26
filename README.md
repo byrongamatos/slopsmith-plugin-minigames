@@ -30,17 +30,35 @@ A minigame is a standard Slopsmith plugin that:
    }
    ```
 
-2. On script load, registers itself with the SDK:
+2. On script load, registers itself with the SDK using the safe late-binding
+   pattern (minigame plugins may load before the SDK; the pending queue
+   handles both orderings — the SDK drains it on init, and the
+   `slopsmith-minigames-ready` event is an alternative for plugins that prefer
+   event-driven registration):
+
+   > **Important:** `spec.id` must exactly match the `id` field in `plugin.json`.
+   > The backend registry uses `plugin_id` (sourced from `plugin.json`) and the
+   > hub UI merges manifest metadata (title, tagline, thumbnail, modifiers) by
+   > that key. If `spec.id` and `plugin.json` `id` diverge, runs and leaderboard
+   > data will be attributed to an unrecognised game and display metadata (title,
+   > thumbnail) will fall back to JS-spec values rather than the richer manifest
+   > values.
 
    ```js
-   window.slopsmithMinigames.register({
+   const spec = {
      id: 'my_game',
-     start: (container, opts) => { /* mount game into container */ },
+     start: ({ container, modifiers, sdk }) => { /* mount game into container */ },
      stop:  () => { /* tear down */ },
-   });
+   };
+
+   if (window.slopsmithMinigames) {
+     window.slopsmithMinigames.register(spec);
+   } else {
+     (window.__slopsmithMinigamesPending = window.__slopsmithMinigamesPending || []).push(spec);
+   }
    ```
 
-3. Calls `slopsmithMinigames.end({ score, durationMs, modifiers, meta })` when the run ends.
+3. Calls `window.slopsmithMinigames.end({ score, durationMs, modifiers, meta })` when the run ends.
 
 See [`slopsmith-plugin-flappy-bend`](https://github.com/byrongamatos/slopsmith-plugin-flappy-bend) for a working example.
 

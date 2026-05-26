@@ -1,0 +1,10 @@
+{
+  "id": "minigames",
+  "name": "Minigames",
+  "version": "0.1.0",
+  "private": false,
+  "screen": "screen.html",
+  "script": "screen.js",
+  "settings": { "html": "settings.html", "server_files": ["minigames/"] },
+  "routes": "routes.py"
+}
