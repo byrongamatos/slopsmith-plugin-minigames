@@ -477,10 +477,24 @@
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────
-  let active = null;       // { spec, modifiers, startedAt }
+  let active   = null;     // { spec, modifiers, resolvedTitle, startedAt, lastOpts }
+  let starting = false;    // true while start() is in-flight (before active is set)
 
   async function start(gameId, opts) {
-    if (active) { console.warn('[minigames] a game is already active; ignoring start(%s)', gameId); return; }
+    // Guard against concurrent start() calls: `active` is set only after the
+    // async registry fetch + modifier picker, so a naive `if (active)` check
+    // would allow two calls to enter the async section simultaneously (e.g.
+    // a double-tap on a tile). `starting` flips synchronously on entry.
+    if (active || starting) { console.warn('[minigames] a game is already active or starting; ignoring start(%s)', gameId); return; }
+    starting = true;
+    try {
+      return await _startInner(gameId, opts);
+    } finally {
+      starting = false;
+    }
+  }
+
+  async function _startInner(gameId, opts) {
     const spec = registered.get(gameId);
     if (!spec) { console.warn('[minigames] no such minigame:', gameId); return; }
 
