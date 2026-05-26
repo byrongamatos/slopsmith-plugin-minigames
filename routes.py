@@ -293,17 +293,25 @@ def setup(app, context):
                 conn.close()
 
             profile = _load_profile()
-            profile["xp"] = int(profile.get("xp", 0)) + xp_gained
+            # Coerce types with fallbacks so manual edits or import/export with
+            # wrong types (e.g. "xp": "100" or "xp": null) don't raise here.
+            def _int(val, default=0):
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    return default
+
+            profile["xp"] = _int(profile.get("xp"), 0) + xp_gained
             profile["level"] = level_for_xp(profile["xp"])
 
             totals = profile.setdefault("totals", {"runs": 0, "score": 0, "per_game": {}})
-            totals["runs"]  = int(totals.get("runs", 0)) + 1
-            totals["score"] = int(totals.get("score", 0)) + submission.score
+            totals["runs"]  = _int(totals.get("runs"), 0) + 1
+            totals["score"] = _int(totals.get("score"), 0) + submission.score
             per_game = totals.setdefault("per_game", {})
             g = per_game.setdefault(submission.game_id, {"runs": 0, "best_score": 0, "total_score": 0})
-            g["runs"]        = int(g.get("runs", 0)) + 1
-            g["total_score"] = int(g.get("total_score", 0)) + submission.score
-            g["best_score"]  = max(int(g.get("best_score", 0)), submission.score)
+            g["runs"]        = _int(g.get("runs"), 0) + 1
+            g["total_score"] = _int(g.get("total_score"), 0) + submission.score
+            g["best_score"]  = max(_int(g.get("best_score"), 0), submission.score)
 
             manifest_unlocks = {
                 p["plugin_id"]: p.get("unlocks", []) for p in installed.values()

@@ -99,7 +99,10 @@
   // provided, otherwise relative to freqHz itself (so always 0).
   function createContinuous(opts) {
     const expectedBaseFreqHz = opts && opts.expectedBaseFreqHz || null;
-    const smoothingMs        = (opts && opts.smoothingMs) || 30;
+    const rawSmoothing       = opts && opts.smoothingMs;
+    const smoothingMs        = (typeof rawSmoothing === 'number' && isFinite(rawSmoothing) && rawSmoothing > 0)
+      ? rawSmoothing
+      : 30;
     const handlers = { pitch: [], end: [] };
     let audioCtx    = null;
     let mediaStream = null;
@@ -324,7 +327,7 @@
       const body = document.getElementById('mg-picker-body');
       body.innerHTML = '';
 
-      const selected = {};
+      const selected = Object.create(null);
       (spec.modifiers || []).forEach(mod => {
         selected[mod.id] = mod.default;
         const row = document.createElement('div');
@@ -652,7 +655,7 @@
     const xp   = document.getElementById('mg-profile-xp');
     const next = document.getElementById('mg-profile-next');
     const bar  = document.getElementById('mg-profile-bar');
-    if (!lvl || !xp || !bar) return;
+    if (!lvl || !xp || !next || !bar) return;
     const p = profile || (await getProfile());
     lvl.textContent  = String(p.level || 1);
     xp.textContent   = `${p.xp || 0} XP`;
