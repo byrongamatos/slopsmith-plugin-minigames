@@ -334,6 +334,11 @@
 
     const extra = document.getElementById('mg-summary-extra');
     if (result.extra) {
+      // Trust boundary: result.extra (summaryHtml) is produced by the game
+      // plugin's own end() call — it is first-party, same-origin code, not
+      // user-supplied content. innerHTML is intentional here so games can
+      // render formatted post-run stats (tables, bold numbers, etc.). If this
+      // field ever flows from an untrusted source we must sanitize first.
       extra.innerHTML = result.extra;
     } else {
       extra.textContent = '';
