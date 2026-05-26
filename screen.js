@@ -102,6 +102,7 @@
     let stopped     = false;
     let lastFreq    = 0;
     let lastConf    = 0;
+    let startError  = null;
     const ringSize  = 2048;
     const ring      = new Float32Array(ringSize);
     let ringWrite   = 0;
@@ -186,7 +187,10 @@
         mute.connect(audioCtx.destination);
       } catch (err) {
         console.error('[minigames] continuous scoring failed to start:', err);
-        emit('end', { reason: 'error', error: err });
+        // Do NOT emit 'end' here — stop() will emit one. Tagging the
+        // stop() reason via a captured variable keeps subscribers from
+        // seeing two events for the same shutdown.
+        startError = err;
         stop();
       }
     }
@@ -199,7 +203,9 @@
       try { if (mediaStream) mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
       try { if (audioCtx) audioCtx.close(); } catch (e) {}
       audioCtx = mediaStream = source = processor = null;
-      emit('end', { reason: 'stopped' });
+      emit('end', startError
+        ? { reason: 'error', error: startError }
+        : { reason: 'stopped' });
     }
 
     start();
@@ -684,43 +690,52 @@
   // from plugin.json so the auto-injected dropdown item is gone; this
   // block adds a top-level link instead, and is idempotent so plugin
   // reloads or hot-refreshes don't double-add.
+  // Each anchor is added independently — the mobile menu DOM may not exist
+  // on the first call (e.g. plugin loads before the mobile nav is rendered),
+  // so we must NOT short-circuit on "desktop already exists". We retry on
+  // a short cadence so the mobile link gets added when its anchor appears.
   function installNavLink() {
-    if (document.getElementById('mg-nav-link-desktop')) return; // idempotent
-    // Desktop: insert just before the plugin dropdown span (so the visual
-    // order is Library / Favorites / Upload / Minigames / [Plugins…] /
-    // Settings). Mobile: insert just before the mobile plugin block.
-    const pluginsAnchor = document.getElementById('nav-plugins');
-    if (pluginsAnchor && pluginsAnchor.parentElement) {
-      const a = document.createElement('a');
-      a.id = 'mg-nav-link-desktop';
-      a.href = '#';
-      a.className = 'text-sm text-gray-400 hover:text-white transition';
-      a.textContent = 'Minigames';
-      a.addEventListener('click', (e) => {
-        e.preventDefault();
-        if (window.slopsmith && typeof window.slopsmith.navigate === 'function') {
-          window.slopsmith.navigate(SCREEN_ID);
-        } else if (typeof window.showScreen === 'function') {
-          window.showScreen(SCREEN_ID);
-        }
-      });
-      pluginsAnchor.parentElement.insertBefore(a, pluginsAnchor);
+    const navigateToHub = (e) => {
+      if (e) e.preventDefault();
+      if (window.slopsmith && typeof window.slopsmith.navigate === 'function') {
+        window.slopsmith.navigate(SCREEN_ID);
+      } else if (typeof window.showScreen === 'function') {
+        window.showScreen(SCREEN_ID);
+      }
+    };
+
+    // Desktop: insert just before the plugin dropdown span (visual order
+    // becomes Library / Favorites / Upload / Minigames / [Plugins…] /
+    // Settings).
+    if (!document.getElementById('mg-nav-link-desktop')) {
+      const pluginsAnchor = document.getElementById('nav-plugins');
+      if (pluginsAnchor && pluginsAnchor.parentElement) {
+        const a = document.createElement('a');
+        a.id = 'mg-nav-link-desktop';
+        a.href = '#';
+        a.className = 'text-sm text-gray-400 hover:text-white transition';
+        a.textContent = 'Minigames';
+        a.addEventListener('click', navigateToHub);
+        pluginsAnchor.parentElement.insertBefore(a, pluginsAnchor);
+      }
     }
-    const mobileAnchor = document.getElementById('mobile-nav-plugins');
-    if (mobileAnchor && mobileAnchor.parentElement && !document.getElementById('mg-nav-link-mobile')) {
-      const m = document.createElement('a');
-      m.id = 'mg-nav-link-mobile';
-      m.href = '#';
-      m.className = 'text-gray-400 hover:text-white';
-      m.textContent = 'Minigames';
-      m.addEventListener('click', (e) => {
-        e.preventDefault();
-        if (window.slopsmith && typeof window.slopsmith.navigate === 'function') {
-          window.slopsmith.navigate(SCREEN_ID);
-        }
-        m.closest('#mobile-menu')?.classList.add('hidden');
-      });
-      mobileAnchor.parentElement.insertBefore(m, mobileAnchor);
+
+    // Mobile: insert just before the mobile plugin block (which itself
+    // sits inside #mobile-menu).
+    if (!document.getElementById('mg-nav-link-mobile')) {
+      const mobileAnchor = document.getElementById('mobile-nav-plugins');
+      if (mobileAnchor && mobileAnchor.parentElement) {
+        const m = document.createElement('a');
+        m.id = 'mg-nav-link-mobile';
+        m.href = '#';
+        m.className = 'text-gray-400 hover:text-white';
+        m.textContent = 'Minigames';
+        m.addEventListener('click', (e) => {
+          navigateToHub(e);
+          m.closest('#mobile-menu')?.classList.add('hidden');
+        });
+        mobileAnchor.parentElement.insertBefore(m, mobileAnchor);
+      }
     }
   }
   installNavLink();
