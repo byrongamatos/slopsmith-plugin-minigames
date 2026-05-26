@@ -35,6 +35,14 @@ _state = {
     "log": logging.getLogger("slopsmith.plugin.minigames"),
 }
 
+# TTL cache for the minigame plugin scan.  Walking the filesystem on every
+# /registry call and run submission is cheap for small plugin counts but adds
+# up on repeated calls. Cache results for _REGISTRY_TTL_S seconds; callers
+# that need a fresh scan (e.g. after a plugin hot-reload) can use
+# _list_minigame_plugins(force_refresh=True).
+_REGISTRY_TTL_S = 10
+_registry_cache: dict = {"ts": 0.0, "data": []}
+
 
 # ── XP / level math ───────────────────────────────────────────────────────────
 
@@ -182,9 +190,18 @@ def _evaluate_unlocks(profile: dict, manifest_unlocks_by_game: dict) -> list:
 
 # ── Minigame discovery (server-side) ──────────────────────────────────────────
 
-def _list_minigame_plugins() -> list:
+def _list_minigame_plugins(force_refresh: bool = False) -> list:
     """Walk the plugin directories, return the `minigame` block of every
-    plugin whose plugin.json declares one. Tolerates missing/invalid JSON."""
+    plugin whose plugin.json declares one. Tolerates missing/invalid JSON.
+
+    Results are cached for _REGISTRY_TTL_S seconds to avoid rescanning the
+    filesystem on every run submission and /registry request. Pass
+    force_refresh=True to bypass the cache (e.g. after a hot-reload).
+    """
+    now = time.monotonic()
+    if not force_refresh and (now - _registry_cache["ts"]) < _REGISTRY_TTL_S:
+        return list(_registry_cache["data"])
+
     resolver = _state["plugins_dir_resolver"]
     if not resolver:
         return []
@@ -216,7 +233,9 @@ def _list_minigame_plugins() -> list:
             "plugin_id": plugin_id,
             "version":   data.get("version"),
         })
-    return out
+    _registry_cache["ts"]   = time.monotonic()
+    _registry_cache["data"] = out
+    return list(out)
 
 
 # ── Request models ────────────────────────────────────────────────────────────

@@ -36,6 +36,14 @@ A minigame is a standard Slopsmith plugin that:
    `slopsmith-minigames-ready` event is an alternative for plugins that prefer
    event-driven registration):
 
+   > **Important:** `spec.id` must exactly match the `id` field in `plugin.json`.
+   > The backend registry uses `plugin_id` (sourced from `plugin.json`) and the
+   > hub UI merges manifest metadata (title, tagline, thumbnail, modifiers) by
+   > that key. If `spec.id` and `plugin.json` `id` diverge, runs and leaderboard
+   > data will be attributed to an unrecognised game and display metadata (title,
+   > thumbnail) will fall back to JS-spec values rather than the richer manifest
+   > values.
+
    ```js
    const spec = {
      id: 'my_game',
