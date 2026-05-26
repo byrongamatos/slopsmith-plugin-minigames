@@ -460,8 +460,12 @@
   // ── Registry ──────────────────────────────────────────────────────────
   const registered = new Map();
   function register(spec) {
-    if (!spec || !spec.id) {
-      console.warn('[minigames] register() called without a spec.id');
+    if (!spec || typeof spec.id !== 'string' || !spec.id) {
+      console.warn('[minigames] register() called with missing or non-string spec.id');
+      return;
+    }
+    if (typeof spec.start !== 'function') {
+      console.warn('[minigames] register(%s): spec.start must be a function', spec.id);
       return;
     }
     registered.set(spec.id, spec);
@@ -545,7 +549,9 @@
     const res = (result && typeof result === 'object') ? result : {};
 
     // Let the game tear itself down first.
-    try { await spec.stop && spec.stop(); } catch (e) { console.error(e); }
+    // Note: `await spec.stop && spec.stop()` has a precedence bug — it awaits
+    // the function reference, not the call. Explicit check + await is correct.
+    try { if (typeof spec.stop === 'function') await spec.stop(); } catch (e) { console.error(e); }
     // Also stop any timers started via scheduler.
     _timers.forEach(t => { clearTimeout(t); clearInterval(t); });
     _timers.clear();

@@ -48,7 +48,7 @@ A minigame is a standard Slopsmith plugin that:
    }
    ```
 
-3. Calls `slopsmithMinigames.end({ score, durationMs, modifiers, meta })` when the run ends.
+3. Calls `window.slopsmithMinigames.end({ score, durationMs, modifiers, meta })` when the run ends.
 
 See [`slopsmith-plugin-flappy-bend`](https://github.com/byrongamatos/slopsmith-plugin-flappy-bend) for a working example.
 
