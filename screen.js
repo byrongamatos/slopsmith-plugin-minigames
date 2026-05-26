@@ -473,6 +473,7 @@
   let active = null;       // { spec, modifiers, startedAt }
 
   async function start(gameId, opts) {
+    if (active) { console.warn('[minigames] a game is already active; ignoring start(%s)', gameId); return; }
     const spec = registered.get(gameId);
     if (!spec) { console.warn('[minigames] no such minigame:', gameId); return; }
 
