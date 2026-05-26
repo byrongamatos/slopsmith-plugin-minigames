@@ -215,9 +215,13 @@ def setup(app, context):
     _state["log"]          = context.get("log") or _state["log"]
 
     # The plugin loader doesn't currently expose a list-other-plugins helper,
-    # so derive the plugins directories from environment + conventions. This
-    # is the same lookup the loader itself uses (SLOPSMITH_PLUGINS_DIR +
-    # ./plugins/) so the result is consistent with what's loaded at runtime.
+    # so derive the plugin directories from environment + conventions:
+    #   1. SLOPSMITH_PLUGINS_DIR env var (explicit override)
+    #   2. The directory that contains this plugin (plugin_self.parent) —
+    #      covers the common case where all plugins live in one flat dir.
+    #   3. plugin_self.parent.parent / "plugins" — covers the layout where
+    #      the repo root is one level above the plugins directory.
+    # Duplicates are removed via a seen-set keyed on resolved paths.
     def _resolve_plugin_dirs():
         roots = []
         env_dir = os.environ.get("SLOPSMITH_PLUGINS_DIR")

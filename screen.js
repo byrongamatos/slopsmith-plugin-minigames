@@ -342,7 +342,7 @@
 
       // Track selector for chart-free games that ship tracks.
       if (Array.isArray(spec.availableTracks) && spec.availableTracks.length) {
-        selected.track = spec.availableTracks[0].id;
+        selected.__track = spec.availableTracks[0].id;
         const row = document.createElement('div');
         row.innerHTML = `
           <div class="text-xs uppercase tracking-widest text-gray-500 mb-2">Track</div>
@@ -355,7 +355,7 @@
           btn.textContent = t.title || t.id;
           if (i === 0) btn.classList.add('!bg-accent', '!text-white');
           btn.onclick = () => {
-            selected.track = t.id;
+            selected.__track = t.id;
             btnRow.querySelectorAll('button').forEach(b => b.classList.remove('!bg-accent', '!text-white'));
             btn.classList.add('!bg-accent', '!text-white');
           };
