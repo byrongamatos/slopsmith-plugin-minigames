@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+# Local-only state when running natively against this repo
+runs.db
+profile.json
