@@ -611,7 +611,7 @@
       // (the Slopsmith plugin loader only serves manifest-declared files,
       // so each minigame that ships extra assets must expose /assets/).
       const art = spec.thumbnail
-        ? `<div class="card-art"><img src="/api/plugins/${escapeHtml(spec.id)}/assets/${escapeHtml(spec.thumbnail)}" alt="${escapeHtml(spec.title || spec.id)}"></div>`
+        ? `<div class="card-art"><img src="/api/plugins/${encodeURIComponent(spec.id)}/assets/${encodeURIComponent(spec.thumbnail)}" alt="${escapeHtml(spec.title || spec.id)}"></div>`
         : `<div class="card-art"><span class="placeholder">🎮</span></div>`;
       tile.innerHTML = `
         ${art}
