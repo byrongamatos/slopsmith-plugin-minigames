@@ -306,7 +306,7 @@ def setup(app, context):
             g["best_score"]  = max(int(g.get("best_score", 0)), submission.score)
 
             manifest_unlocks = {
-                p["plugin_id"]: p.get("unlocks", []) for p in _list_minigame_plugins()
+                p["plugin_id"]: p.get("unlocks", []) for p in installed.values()
             }
             profile["unlocks"] = _evaluate_unlocks(profile, manifest_unlocks)
             _save_profile(profile)

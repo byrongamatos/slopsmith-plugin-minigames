@@ -204,7 +204,7 @@
       try { if (processor) processor.disconnect(); } catch (e) {}
       try { if (source) source.disconnect(); } catch (e) {}
       try { if (mediaStream) mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
-      try { if (audioCtx) audioCtx.close(); } catch (e) {}
+      try { if (audioCtx) audioCtx.close().catch(() => {}); } catch (e) {}
       audioCtx = mediaStream = source = processor = null;
       emit('end', startError
         ? { reason: 'error', error: startError }
@@ -232,7 +232,7 @@
         stop() {
           if (_unavailStopped) return;
           _unavailStopped = true;
-          handlers.end.forEach(cb => cb({ reason: 'unavailable' }));
+          handlers.end.forEach(cb => { try { cb({ reason: 'unavailable' }); } catch (e) { console.error(e); } });
         },
         isRunning: () => false,
       };
@@ -255,7 +255,7 @@
         root.removeEventListener('notedetect:hit', onHit);
         root.removeEventListener('notedetect:miss', onMiss);
         try { inst.destroy && inst.destroy(); } catch (e) {}
-        handlers.end.forEach(cb => cb({ reason: 'stopped' }));
+        handlers.end.forEach(cb => { try { cb({ reason: 'stopped' }); } catch (e) { console.error(e); } });
       },
       isRunning: () => !stopped,
       noteDetector: inst,
