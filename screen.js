@@ -518,15 +518,18 @@
     const { spec, modifiers, startedAt, lastOpts } = active;
     active = null;
 
+    // Tolerate callers that pass no result (or null/undefined) — normalise to {}.
+    const res = (result && typeof result === 'object') ? result : {};
+
     // Let the game tear itself down first.
     try { await spec.stop && spec.stop(); } catch (e) { console.error(e); }
     // Also stop any timers started via scheduler.
     _timers.forEach(t => { clearTimeout(t); clearInterval(t); });
     _timers.clear();
 
-    const durationMs = Math.max(0, result.durationMs ?? Math.round(performance.now() - startedAt));
-    const score      = Math.max(0, Math.floor(Number(result.score) || 0));
-    const meta       = result.meta || {};
+    const durationMs = Math.max(0, res.durationMs ?? Math.round(performance.now() - startedAt));
+    const score      = Math.max(0, Math.floor(Number(res.score) || 0));
+    const meta       = res.meta || {};
 
     document.getElementById('mg-stage').classList.add('hidden');
     document.getElementById('mg-stage-body').innerHTML = '';
@@ -554,7 +557,7 @@
       score,
       xpGained,
       best,
-      extra:    result.summaryHtml || '',
+      extra:    res.summaryHtml || '',
       lastOpts,
     });
     // Refresh profile strip.

@@ -344,6 +344,8 @@ def setup(app, context):
             raise HTTPException(status_code=400, detail="limit out of range")
         # `scope` is reserved for future cross-user comparisons. v1 is
         # single-user so 'self' and 'global' both return this install's runs.
+        if scope not in ("self", "global"):
+            raise HTTPException(status_code=400, detail="scope must be 'self' or 'global'")
         q = "SELECT id, game_id, score, duration_ms, modifiers, meta, xp_awarded, created_at FROM runs"
         params: list = []
         if game_id:
