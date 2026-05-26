@@ -370,15 +370,19 @@ def setup(app, context):
     @app.get("/api/plugins/minigames/profile")
     def get_profile():
         profile = _load_profile()
-        # Coerce xp to int so xp_to_next_level / level_for_xp don't crash on
-        # non-integer values that can appear after a manual edit or import.
+        # Coerce xp and level to ints so xp_to_next_level / level_for_xp don't
+        # crash on non-integer values that can appear after a manual edit or
+        # import.  Recompute level from coerced xp so the two are always in sync
+        # (stale or wrong-type level in the file is ignored).
         try:
             xp = int(profile.get("xp", 0))
         except (TypeError, ValueError):
             xp = 0
+        level = level_for_xp(xp)
         return {
             **profile,
             "xp": xp,
+            "level": level,
             "xp_to_next_level": xp_to_next_level(xp),
         }
 

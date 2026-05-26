@@ -30,14 +30,22 @@ A minigame is a standard Slopsmith plugin that:
    }
    ```
 
-2. On script load, registers itself with the SDK:
+2. On script load, registers itself with the SDK using the safe late-binding
+   pattern (minigame plugins may load before the SDK; the pending queue and
+   the `slopsmith-minigames-ready` event handle both orderings):
 
    ```js
-   window.slopsmithMinigames.register({
+   const spec = {
      id: 'my_game',
      start: ({ container, modifiers, sdk }) => { /* mount game into container */ },
      stop:  () => { /* tear down */ },
-   });
+   };
+
+   if (window.slopsmithMinigames) {
+     window.slopsmithMinigames.register(spec);
+   } else {
+     (window.__slopsmithMinigamesPending = window.__slopsmithMinigamesPending || []).push(spec);
+   }
    ```
 
 3. Calls `slopsmithMinigames.end({ score, durationMs, modifiers, meta })` when the run ends.
