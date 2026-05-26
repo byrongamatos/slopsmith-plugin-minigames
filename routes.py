@@ -141,7 +141,13 @@ def _evaluate_unlocks(profile: dict, manifest_unlocks_by_game: dict) -> list:
     """Given current XP and per-game unlock definitions, return the new list
     of unlocked IDs (game-scoped to avoid collision: 'game_id:unlock_id')."""
     raw_unlocks = profile.get("unlocks")
-    earned = set(raw_unlocks if isinstance(raw_unlocks, list) else [])
+    # Coerce to list and filter to strings only — non-string items (e.g. ints
+    # from a manual edit) would cause sorted() to fail on mixed-type comparison
+    # in Python 3, and are invalid unlock IDs anyway.
+    earned = set(
+        v for v in (raw_unlocks if isinstance(raw_unlocks, list) else [])
+        if isinstance(v, str)
+    )
     xp = profile.get("xp", 0)
     for game_id, unlocks in manifest_unlocks_by_game.items():
         for u in unlocks or []:
@@ -313,11 +319,22 @@ def setup(app, context):
             profile["xp"] = _int(profile.get("xp"), 0) + xp_gained
             profile["level"] = level_for_xp(profile["xp"])
 
-            totals = profile.setdefault("totals", {"runs": 0, "score": 0, "per_game": {}})
+            # Validate that totals / per_game / per-game entry are dicts; reset
+            # to defaults when a manual edit or import left wrong types.
+            existing_totals = profile.get("totals")
+            if not isinstance(existing_totals, dict):
+                profile["totals"] = {"runs": 0, "score": 0, "per_game": {}}
+            totals = profile["totals"]
             totals["runs"]  = _int(totals.get("runs"), 0) + 1
             totals["score"] = _int(totals.get("score"), 0) + submission.score
-            per_game = totals.setdefault("per_game", {})
-            g = per_game.setdefault(submission.game_id, {"runs": 0, "best_score": 0, "total_score": 0})
+            existing_per_game = totals.get("per_game")
+            if not isinstance(existing_per_game, dict):
+                totals["per_game"] = {}
+            per_game = totals["per_game"]
+            existing_g = per_game.get(submission.game_id)
+            if not isinstance(existing_g, dict):
+                per_game[submission.game_id] = {"runs": 0, "best_score": 0, "total_score": 0}
+            g = per_game[submission.game_id]
             g["runs"]        = _int(g.get("runs"), 0) + 1
             g["total_score"] = _int(g.get("total_score"), 0) + submission.score
             g["best_score"]  = max(_int(g.get("best_score"), 0), submission.score)

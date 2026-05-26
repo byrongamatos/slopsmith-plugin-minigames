@@ -143,8 +143,18 @@
           return;
         }
         mediaStream = stream;
+        if (stopped) {
+          stream.getTracks().forEach(t => t.stop());
+          return;
+        }
         const AC = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AC();
+        if (stopped) {
+          audioCtx.close().catch(() => {});
+          audioCtx = null;
+          stream.getTracks().forEach(t => t.stop());
+          return;
+        }
         source = audioCtx.createMediaStreamSource(stream);
         // ScriptProcessor is deprecated but universally supported and lets
         // us pull raw frames synchronously — fine for v1. Migration to
@@ -152,6 +162,7 @@
         const bufSize = 1024;
         processor = audioCtx.createScriptProcessor(bufSize, 1, 1);
         processor.onaudioprocess = (e) => {
+          if (stopped) return; // race: stop() called while onaudioprocess was queued
           const inBuf = e.inputBuffer.getChannelData(0);
           // Copy into ring.
           for (let i = 0; i < inBuf.length; i++) {
@@ -616,7 +627,9 @@
     const perGame = (profileResp.totals && profileResp.totals.per_game) || {};
 
     // Build a lookup from plugin_id → manifest entry for merging below.
-    const manifestByGame = {};
+    // Use Object.create(null) to prevent prototype-pollution if a plugin id
+    // were ever '__proto__' or another special key.
+    const manifestByGame = Object.create(null);
     (registryResp.minigames || []).forEach(m => { manifestByGame[m.plugin_id] = m; });
 
     const list = Array.from(registered.values());
