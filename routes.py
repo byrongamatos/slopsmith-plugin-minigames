@@ -370,9 +370,16 @@ def setup(app, context):
     @app.get("/api/plugins/minigames/profile")
     def get_profile():
         profile = _load_profile()
+        # Coerce xp to int so xp_to_next_level / level_for_xp don't crash on
+        # non-integer values that can appear after a manual edit or import.
+        try:
+            xp = int(profile.get("xp", 0))
+        except (TypeError, ValueError):
+            xp = 0
         return {
             **profile,
-            "xp_to_next_level": xp_to_next_level(profile.get("xp", 0)),
+            "xp": xp,
+            "xp_to_next_level": xp_to_next_level(xp),
         }
 
     @app.post("/api/plugins/minigames/profile/reset")

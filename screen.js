@@ -465,7 +465,7 @@
       // JS spec fields serve as fallback when the manifest omits them.
       const reg = await getServerRegistry().catch(() => ({ minigames: [] }));
       const manifestSpec = (reg.minigames || []).find(m => m.plugin_id === gameId) || {};
-      const tracks = spec.availableTracks || manifestSpec.availableTracks || null;
+      const tracks = manifestSpec.availableTracks || spec.availableTracks || null;
       try {
         const pick = await modifierPicker({
           id:               gameId,
