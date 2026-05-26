@@ -646,11 +646,16 @@
     _hubRenderInFlight = true;
     try {
       await _renderHubOnce();
+    } catch (e) {
+      // _renderHubOnce() failing is non-fatal — the hub just won't update.
+      // Swallow here so all fire-and-forget callsites don't need .catch().
+      console.error('[minigames] renderHub failed:', e);
     } finally {
       _hubRenderInFlight = false;
       if (_hubRenderQueued) {
         _hubRenderQueued = false;
-        renderHub();
+        // Fire-and-forget; errors are swallowed above.
+        renderHub().catch(() => {});
       }
     }
   }
