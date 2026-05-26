@@ -31,8 +31,10 @@ A minigame is a standard Slopsmith plugin that:
    ```
 
 2. On script load, registers itself with the SDK using the safe late-binding
-   pattern (minigame plugins may load before the SDK; the pending queue and
-   the `slopsmith-minigames-ready` event handle both orderings):
+   pattern (minigame plugins may load before the SDK; the pending queue
+   handles both orderings — the SDK drains it on init, and the
+   `slopsmith-minigames-ready` event is an alternative for plugins that prefer
+   event-driven registration):
 
    ```js
    const spec = {

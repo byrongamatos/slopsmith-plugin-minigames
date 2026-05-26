@@ -6,7 +6,7 @@
       <code>&lt;config_dir&gt;/minigames/</code> and round-trip through
       the global settings export.
     </p>
-    <button id="mg-settings-reset"
+    <button id="mg-settings-reset" type="button"
             class="px-3 py-2 rounded bg-red-600/80 hover:bg-red-500 text-white text-sm">
       Reset profile + history
     </button>
@@ -16,9 +16,9 @@
 
 <script>
   (function () {
-    const btn = document.getElementById('mg-settings-reset');
+    const btn    = document.getElementById('mg-settings-reset');
     const status = document.getElementById('mg-settings-reset-status');
-    if (!btn) return;
+    if (!btn || !status) return;
     btn.addEventListener('click', async () => {
       if (!confirm('Wipe all minigame XP, unlocks, and run history? This cannot be undone.')) return;
       if (!window.slopsmithMinigames?.resetProfile) {
