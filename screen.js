@@ -98,7 +98,14 @@
   // expectedBaseFreqHz }. `cents` is relative to expectedBaseFreqHz if
   // provided, otherwise relative to freqHz itself (so always 0).
   function createContinuous(opts) {
-    const expectedBaseFreqHz = opts && opts.expectedBaseFreqHz || null;
+    // Coerce expectedBaseFreqHz to a finite positive number, or null.
+    // A truthy-but-invalid value (NaN, Infinity, negative, string) would make
+    // Math.log2(freq / expectedBaseFreqHz) return NaN and corrupt every emitted
+    // pitch event.
+    const _rawBase = opts && opts.expectedBaseFreqHz;
+    const expectedBaseFreqHz = (typeof _rawBase === 'number' && isFinite(_rawBase) && _rawBase > 0)
+      ? _rawBase
+      : null;
     const rawSmoothing       = opts && opts.smoothingMs;
     const smoothingMs        = (typeof rawSmoothing === 'number' && isFinite(rawSmoothing) && rawSmoothing > 0)
       ? rawSmoothing
