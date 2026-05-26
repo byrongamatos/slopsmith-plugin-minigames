@@ -149,6 +149,11 @@
         }
         const AC = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AC();
+        // Some browsers (Chrome, Safari) start AudioContexts in "suspended"
+        // state when constructed outside a direct user-gesture call stack.
+        // resume() must be called explicitly; ignore errors (e.g. the context
+        // is already running — not an error state we need to surface).
+        await audioCtx.resume().catch(() => {});
         if (stopped) {
           audioCtx.close().catch(() => {});
           audioCtx = null;
