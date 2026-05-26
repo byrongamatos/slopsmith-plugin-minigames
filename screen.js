@@ -597,7 +597,14 @@
     body.appendChild(container);
 
     active = { spec, modifiers, resolvedTitle, startedAt: performance.now(), lastOpts: { modifiers } };
-    quit.onclick = () => end({ score: 0, durationMs: 0, modifiers, meta: { reason: 'quit' } });
+    // Compute elapsed time at quit so the recorded duration reflects actual play
+    // time rather than always logging 0ms (which would bypass end()'s fallback).
+    quit.onclick = () => end({
+      score: 0,
+      durationMs: active ? Math.round(performance.now() - active.startedAt) : 0,
+      modifiers,
+      meta: { reason: 'quit' },
+    });
 
     try {
       await spec.start({
@@ -609,7 +616,10 @@
       });
     } catch (e) {
       console.error('[minigames] minigame start() threw:', e);
-      await end({ score: 0, durationMs: 0, modifiers, meta: { reason: 'error', error: String(e) } });
+      // Compute elapsed time so failed starts record meaningful duration rather
+      // than always logging 0ms and bypassing end()'s fallback calculation.
+      const errDuration = active ? Math.round(performance.now() - active.startedAt) : 0;
+      await end({ score: 0, durationMs: errDuration, modifiers, meta: { reason: 'error', error: String(e) } });
     }
   }
 
