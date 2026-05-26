@@ -151,6 +151,12 @@ def _evaluate_unlocks(profile: dict, manifest_unlocks_by_game: dict) -> list:
     xp = profile.get("xp", 0)
     for game_id, unlocks in manifest_unlocks_by_game.items():
         for u in unlocks or []:
+            if not isinstance(u, dict):
+                _state["log"].warning(
+                    "minigame %s has a non-object unlock entry (%r); skipping",
+                    game_id, type(u).__name__,
+                )
+                continue
             unlock_id = u.get("id")
             if not unlock_id:
                 _state["log"].warning("minigame %s has an unlock entry missing 'id'; skipping", game_id)

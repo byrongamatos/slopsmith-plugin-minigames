@@ -390,11 +390,14 @@
       root.classList.remove('hidden');
       const cleanup = () => { root.classList.add('hidden'); };
       document.getElementById('mg-picker-cancel').onclick = () => { cleanup(); reject(new Error('cancelled')); };
-      // Spread null-proto `selected` into a plain {} before resolving so
-      // consumers receive a normal object (with hasOwnProperty etc.) while
-      // the null-proto storage still prevents prototype pollution during
-      // modifier-id assignment above.
-      document.getElementById('mg-picker-start').onclick  = () => { cleanup(); resolve({ modifiers: Object.assign({}, selected) }); };
+      // Convert the null-proto `selected` map into a plain object. Using
+      // Object.fromEntries avoids the Object.assign({}, ...) footgun where
+      // a modifier id of '__proto__' would invoke the setter on the target
+      // and mutate its prototype — fromEntries always creates own data props.
+      document.getElementById('mg-picker-start').onclick  = () => {
+        cleanup();
+        resolve({ modifiers: Object.fromEntries(Object.entries(selected)) });
+      };
     });
   }
 
@@ -542,7 +545,10 @@
     _timers.forEach(t => { clearTimeout(t); clearInterval(t); });
     _timers.clear();
 
-    const durationMs = Math.max(0, res.durationMs ?? Math.round(performance.now() - startedAt));
+    const _rawDur = Number(res.durationMs);
+    const durationMs = (Number.isFinite(_rawDur) && _rawDur >= 0)
+      ? Math.floor(_rawDur)
+      : Math.round(performance.now() - startedAt);
     const score      = Math.max(0, Math.floor(Number(res.score) || 0));
     const meta       = res.meta || {};
 
