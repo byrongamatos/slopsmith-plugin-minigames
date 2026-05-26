@@ -148,7 +148,12 @@ def _evaluate_unlocks(profile: dict, manifest_unlocks_by_game: dict) -> list:
         v for v in (raw_unlocks if isinstance(raw_unlocks, list) else [])
         if isinstance(v, str)
     )
-    xp = profile.get("xp", 0)
+    # Coerce xp to numeric; non-numeric values (e.g. "100" from a manual edit)
+    # would raise TypeError in the comparison `if xp >= unlock_xp` below.
+    try:
+        xp = float(profile.get("xp", 0))
+    except (TypeError, ValueError):
+        xp = 0
     for game_id, unlocks in manifest_unlocks_by_game.items():
         for u in unlocks or []:
             if not isinstance(u, dict):

@@ -801,7 +801,8 @@
         m.textContent = 'Minigames';
         m.addEventListener('click', (e) => {
           navigateToHub(e);
-          m.closest('#mobile-menu')?.classList.add('hidden');
+          const mobileMenu = document.getElementById('mobile-menu');
+          if (mobileMenu) mobileMenu.classList.add('hidden');
         });
         mobileAnchor.parentElement.insertBefore(m, mobileAnchor);
       }
