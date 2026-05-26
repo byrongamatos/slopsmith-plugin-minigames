@@ -105,6 +105,9 @@
     let startError  = null;
     const ringSize  = 2048;
     const ring      = new Float32Array(ringSize);
+    // Preallocated contiguous window for YIN — reused every audio callback
+    // to avoid per-callback GC pressure from repeated Float32Array allocs.
+    const yinWindow = new Float32Array(ringSize);
     let ringWrite   = 0;
 
     const handle = {
@@ -144,11 +147,11 @@
             ringWrite = (ringWrite + 1) % ringSize;
           }
           // Build a contiguous window for YIN: from oldest sample to newest.
-          const window_ = new Float32Array(ringSize);
+          // Write into the preallocated yinWindow to avoid per-callback allocs.
           for (let i = 0; i < ringSize; i++) {
-            window_[i] = ring[(ringWrite + i) % ringSize];
+            yinWindow[i] = ring[(ringWrite + i) % ringSize];
           }
-          const res = yinDetect(window_, audioCtx.sampleRate, { minHz: 70, maxHz: 1500 });
+          const res = yinDetect(yinWindow, audioCtx.sampleRate, { minHz: 70, maxHz: 1500 });
           const nowMs = performance.now();
           if (res && res.confidence > 0.3) {
             // EMA smoothing in log-freq space.
@@ -223,9 +226,14 @@
     const fn = window.createNoteDetector;
     if (typeof fn !== 'function') {
       console.warn('[minigames] window.createNoteDetector unavailable — install slopsmith-plugin-notedetect for discrete/chord scoring.');
+      let _unavailStopped = false;
       return {
         on(event, cb) { (handlers[event] || (handlers[event] = [])).push(cb); return this; },
-        stop() { handlers.end.forEach(cb => cb({ reason: 'unavailable' })); },
+        stop() {
+          if (_unavailStopped) return;
+          _unavailStopped = true;
+          handlers.end.forEach(cb => cb({ reason: 'unavailable' }));
+        },
         isRunning: () => false,
       };
     }
@@ -570,16 +578,15 @@
   }
 
   async function _renderHubOnce() {
-    await renderProfileStrip().catch(() => {});
-
     const grid  = document.getElementById('mg-grid');
     const empty = document.getElementById('mg-empty');
     if (!grid || !empty) return;
 
-    // Fetch per-game bests BEFORE we touch the DOM so the clear-and-append
-    // is fully synchronous from the browser's POV (no chance of another
-    // render slipping in mid-rebuild).
+    // Fetch the profile once. Pass it to renderProfileStrip so the strip
+    // and the per-game stats share a single round-trip rather than each
+    // issuing their own GET /profile.
     const profileResp = await getProfile().catch(() => ({}));
+    await renderProfileStrip(profileResp).catch(() => {});
     const perGame = (profileResp.totals && profileResp.totals.per_game) || {};
 
     const list = Array.from(registered.values());
@@ -597,6 +604,8 @@
       // matching hover/focus behaviour).
       tile.className = 'song-card';
       tile.tabIndex  = 0;
+      tile.setAttribute('role', 'button');
+      tile.setAttribute('aria-label', spec.title || spec.id);
       const stats = perGame[spec.id] || { runs: 0, best_score: 0 };
       // Thumbnails are served via the minigame plugin's own asset route
       // (the Slopsmith plugin loader only serves manifest-declared files,
@@ -626,19 +635,21 @@
     });
   }
 
-  async function renderProfileStrip() {
+  // Accepts an already-fetched profile so callers can avoid a redundant
+  // network round-trip when they already have the profile in hand.
+  async function renderProfileStrip(profile) {
     const lvl  = document.getElementById('mg-profile-level');
     const xp   = document.getElementById('mg-profile-xp');
     const next = document.getElementById('mg-profile-next');
     const bar  = document.getElementById('mg-profile-bar');
     if (!lvl || !xp || !bar) return;
-    const p = await getProfile();
+    const p = profile || (await getProfile());
     lvl.textContent  = String(p.level || 1);
     xp.textContent   = `${p.xp || 0} XP`;
     next.textContent = p.xp_to_next_level != null ? `${p.xp_to_next_level} to next` : '';
     const lo = ((p.level || 1) - 1) ** 2 * 100;
     const hi = (p.level || 1) ** 2 * 100;
-    const pct = Math.max(0, Math.min(100, ((p.xp - lo) / Math.max(1, hi - lo)) * 100));
+    const pct = Math.max(0, Math.min(100, (((p.xp || 0) - lo) / Math.max(1, hi - lo)) * 100));
     bar.style.width = pct + '%';
   }
 

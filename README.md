@@ -35,7 +35,7 @@ A minigame is a standard Slopsmith plugin that:
    ```js
    window.slopsmithMinigames.register({
      id: 'my_game',
-     start: (container, opts) => { /* mount game into container */ },
+     start: ({ container, modifiers, sdk }) => { /* mount game into container */ },
      stop:  () => { /* tear down */ },
    });
    ```

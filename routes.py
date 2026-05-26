@@ -136,7 +136,11 @@ def _evaluate_unlocks(profile: dict, manifest_unlocks_by_game: dict) -> list:
     xp = profile.get("xp", 0)
     for game_id, unlocks in manifest_unlocks_by_game.items():
         for u in unlocks or []:
-            key = f"{game_id}:{u['id']}"
+            unlock_id = u.get("id")
+            if not unlock_id:
+                _state["log"].warning("minigame %s has an unlock entry missing 'id'; skipping", game_id)
+                continue
+            key = f"{game_id}:{unlock_id}"
             if xp >= u.get("xp", 0):
                 earned.add(key)
     return sorted(earned)
@@ -164,10 +168,12 @@ def _list_minigame_plugins() -> list:
         spec = data.get("minigame")
         if not isinstance(spec, dict):
             continue
+        # Spread spec first so authoritative top-level fields (plugin_id,
+        # version) win if the minigame block contains conflicting keys.
         out.append({
+            **spec,
             "plugin_id": data.get("id"),
             "version":   data.get("version"),
-            **spec,
         })
     return out
 
