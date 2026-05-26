@@ -174,7 +174,17 @@
           for (let i = 0; i < ringSize; i++) {
             yinWindow[i] = ring[(ringWrite + i) % ringSize];
           }
-          const res = yinDetect(yinWindow, audioCtx.sampleRate, { minHz: 70, maxHz: 1500 }, yinD, yinCmnd);
+          // Energy gate: on silence/near-silence (all-zero or near-zero buffer)
+          // YIN's difference function is 0 → cmnd drops to 0 → tauEstimate=tauMin
+          // → conf=1 at ~maxHz. Gate on RMS before running YIN so silent input
+          // decays confidence rather than emitting a spurious high-freq pitch.
+          // -60 dBFS RMS threshold (≈ 0.001 full-scale).
+          let rms = 0;
+          for (let i = 0; i < ringSize; i++) rms += yinWindow[i] * yinWindow[i];
+          rms = Math.sqrt(rms / ringSize);
+          const res = (rms > 0.001)
+            ? yinDetect(yinWindow, audioCtx.sampleRate, { minHz: 70, maxHz: 1500 }, yinD, yinCmnd)
+            : null;
           const nowMs = performance.now();
           if (res && res.confidence > 0.3) {
             // EMA smoothing in log-freq space.
@@ -318,13 +328,28 @@
     }
 
     root.classList.remove('hidden');
-    document.getElementById('mg-summary-close').onclick = () => {
+
+    const closeBtn = document.getElementById('mg-summary-close');
+    const againBtn = document.getElementById('mg-summary-again');
+
+    const closeSummary = () => {
       root.classList.add('hidden');
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { closeSummary(); renderHub(); }
+    };
+    document.addEventListener('keydown', onKey);
+    // Move focus into the modal for keyboard/screen-reader users.
+    if (closeBtn) setTimeout(() => closeBtn.focus(), 0);
+
+    closeBtn.onclick = () => {
+      closeSummary();
       // Re-render hub so updated XP / best appears.
       renderHub();
     };
-    document.getElementById('mg-summary-again').onclick = () => {
-      root.classList.add('hidden');
+    againBtn.onclick = () => {
+      closeSummary();
       if (spec) start(spec.id, result.lastOpts || {});
       else renderHub();
     };
@@ -391,13 +416,27 @@
       }
 
       root.classList.remove('hidden');
-      const cleanup = () => { root.classList.add('hidden'); };
-      document.getElementById('mg-picker-cancel').onclick = () => { cleanup(); reject(new Error('cancelled')); };
+
+      const cancelBtn = document.getElementById('mg-picker-cancel');
+      const startBtn  = document.getElementById('mg-picker-start');
+
+      const onKey = (e) => {
+        if (e.key === 'Escape') { cleanup(); reject(new Error('cancelled')); }
+      };
+      const cleanup = () => {
+        root.classList.add('hidden');
+        document.removeEventListener('keydown', onKey);
+      };
+      document.addEventListener('keydown', onKey);
+      // Move focus into the modal so keyboard/screen-reader users can proceed.
+      if (startBtn) setTimeout(() => startBtn.focus(), 0);
+
+      cancelBtn.onclick = () => { cleanup(); reject(new Error('cancelled')); };
       // Convert the null-proto `selected` map into a plain object. Using
       // Object.fromEntries avoids the Object.assign({}, ...) footgun where
       // a modifier id of '__proto__' would invoke the setter on the target
       // and mutate its prototype — fromEntries always creates own data props.
-      document.getElementById('mg-picker-start').onclick  = () => {
+      startBtn.onclick  = () => {
         cleanup();
         resolve({ modifiers: Object.fromEntries(Object.entries(selected)) });
       };

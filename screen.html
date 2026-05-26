@@ -52,7 +52,8 @@
   <!-- In-game container — only visible while a minigame is running.
        z-[60] sits above the Slopsmith navbar (z-50) so the game owns the
        viewport during a run; the stage's own Quit button is the exit. -->
-  <div id="mg-stage" class="hidden fixed inset-0 z-[60] bg-black/95 flex flex-col">
+  <div id="mg-stage" class="hidden fixed inset-0 z-[60] bg-black/95 flex flex-col"
+       role="region" aria-labelledby="mg-stage-title">
     <div class="flex items-center justify-between px-6 py-3 border-b border-dark-700">
       <div>
         <div id="mg-stage-title" class="text-lg font-semibold text-white"></div>
@@ -70,9 +71,10 @@
   </div>
 
   <!-- Run summary modal -->
-  <div id="mg-summary" class="hidden fixed inset-0 z-[60] bg-black/70 flex items-center justify-center">
+  <div id="mg-summary" class="hidden fixed inset-0 z-[60] bg-black/70 flex items-center justify-center"
+       role="dialog" aria-modal="true" aria-labelledby="mg-summary-heading">
     <div class="bg-dark-800 rounded-lg shadow-2xl p-8 w-full max-w-md mx-4">
-      <h2 class="text-2xl font-bold text-white mb-1">Run complete</h2>
+      <h2 id="mg-summary-heading" class="text-2xl font-bold text-white mb-1">Run complete</h2>
       <p id="mg-summary-game" class="text-sm text-gray-400 mb-6"></p>
 
       <div class="grid grid-cols-3 gap-4 mb-6 text-center">
@@ -106,7 +108,8 @@
   </div>
 
   <!-- Modifier picker (shown before a run starts) -->
-  <div id="mg-picker" class="hidden fixed inset-0 z-[60] bg-black/70 flex items-center justify-center">
+  <div id="mg-picker" class="hidden fixed inset-0 z-[60] bg-black/70 flex items-center justify-center"
+       role="dialog" aria-modal="true" aria-labelledby="mg-picker-title">
     <div class="bg-dark-800 rounded-lg shadow-2xl p-8 w-full max-w-md mx-4">
       <h2 id="mg-picker-title" class="text-2xl font-bold text-white mb-1"></h2>
       <p  id="mg-picker-tagline" class="text-sm text-gray-400 mb-6"></p>
