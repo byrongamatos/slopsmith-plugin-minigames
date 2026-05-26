@@ -301,8 +301,11 @@
     const root = document.getElementById('mg-summary');
     if (!root) return;
     const spec = registered.get(result.gameId);
+    // Prefer the caller-supplied resolvedTitle (manifest-resolved) over the
+    // JS spec title so minigames that register a minimal spec still show the
+    // correct display name in the post-game summary.
     document.getElementById('mg-summary-game').textContent =
-      spec ? spec.title || spec.id : (result.gameId || '');
+      result.resolvedTitle || (spec ? spec.title || spec.id : '') || (result.gameId || '');
     document.getElementById('mg-summary-score').textContent = String(Math.floor(Math.max(0, Number(result.score) || 0)));
     document.getElementById('mg-summary-xp').textContent    = '+' + String(Math.floor(Math.max(0, Number(result.xpGained) || 0)));
     document.getElementById('mg-summary-best').textContent  = String(Math.floor(Math.max(0, Number(result.best) || 0)));
@@ -481,18 +484,23 @@
     const spec = registered.get(gameId);
     if (!spec) { console.warn('[minigames] no such minigame:', gameId); return; }
 
+    // Always fetch the server registry so the resolved title/tagline can be
+    // used in both the stage header and the run summary — even when modifiers
+    // are supplied directly (e.g. Play Again with cached opts).
+    const reg = await getServerRegistry().catch(() => ({ minigames: [] }));
+    const manifestSpec = (reg.minigames || []).find(m => m.plugin_id === gameId) || {};
+    const resolvedTitle = manifestSpec.title || spec.title || gameId;
+
     let modifiers = opts && opts.modifiers;
     if (!modifiers) {
       // Build a picker config from the server-side manifest entry (which
       // includes modifiers + unlocks). Manifest fields take precedence;
       // JS spec fields serve as fallback when the manifest omits them.
-      const reg = await getServerRegistry().catch(() => ({ minigames: [] }));
-      const manifestSpec = (reg.minigames || []).find(m => m.plugin_id === gameId) || {};
       const tracks = manifestSpec.availableTracks || spec.availableTracks || null;
       try {
         const pick = await modifierPicker({
           id:               gameId,
-          title:            manifestSpec.title || spec.title || gameId,
+          title:            resolvedTitle,
           tagline:          manifestSpec.tagline || spec.tagline || '',
           modifiers:        manifestSpec.modifiers || spec.modifiers || [],
           availableTracks:  tracks,
@@ -515,7 +523,7 @@
     }
     stage.classList.remove('hidden');
     body.innerHTML = '';
-    title.textContent = spec.title || spec.id;
+    title.textContent = resolvedTitle;
     instr.textContent = '';
     mountHUD('');
 
@@ -523,7 +531,7 @@
     container.className = 'mg-game-root';
     body.appendChild(container);
 
-    active = { spec, modifiers, startedAt: performance.now(), lastOpts: { modifiers } };
+    active = { spec, modifiers, resolvedTitle, startedAt: performance.now(), lastOpts: { modifiers } };
     quit.onclick = () => end({ score: 0, durationMs: 0, modifiers, meta: { reason: 'quit' } });
 
     try {
@@ -542,7 +550,7 @@
 
   async function end(result) {
     if (!active) return;
-    const { spec, modifiers, startedAt, lastOpts } = active;
+    const { spec, modifiers, resolvedTitle, startedAt, lastOpts } = active;
     active = null;
 
     // Tolerate callers that pass no result (or null/undefined) — normalise to {}.
@@ -592,11 +600,12 @@
     }
 
     runSummary({
-      gameId:   spec.id,
+      gameId:        spec.id,
+      resolvedTitle,
       score,
       xpGained,
       best,
-      extra:    res.summaryHtml || '',
+      extra:         res.summaryHtml || '',
       lastOpts,
     });
     // Refresh profile strip.
