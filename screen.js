@@ -1,0 +1,731 @@
+// slopsmith-plugin-minigames — SDK + hub controller.
+//
+// This file does two things:
+//   1) Publishes window.slopsmithMinigames — the SDK that individual
+//      minigame plugins call (register, start/end, scoring, ui, persistence).
+//   2) Mounts a hub UI in screen.html that lists every registered minigame
+//      and the shared profile/leaderboards.
+//
+// Plugin load order is alphabetical, so minigame plugins (e.g. flappy_bend)
+// load BEFORE this script. They should register via a tiny shim that queues
+// to `window.__slopsmithMinigamesPending` if the SDK isn't up yet — we drain
+// the queue on init and also fire `slopsmith-minigames-ready` once ready.
+
+(function () {
+  'use strict';
+
+  if (window.slopsmithMinigames && window.slopsmithMinigames.__alive) {
+    return; // hot-reload guard
+  }
+
+  const PLUGIN_ID = 'minigames';
+  const API_BASE  = `/api/plugins/${PLUGIN_ID}`;
+
+  // ── YIN pitch tracker ─────────────────────────────────────────────────
+  // Compact YIN (de Cheveigné & Kawahara, 2002). Sufficient for monophonic
+  // electric-guitar pitch tracking down to ~80 Hz. Returns:
+  //   { freqHz, confidence }   — confidence in [0, 1]
+  // or null if no confident pitch was found in the buffer.
+  function yinDetect(buf, sampleRate, opts) {
+    const threshold = (opts && opts.threshold) || 0.15;
+    const minHz     = (opts && opts.minHz)     || 70;
+    const maxHz     = (opts && opts.maxHz)     || 1500;
+    const N         = buf.length;
+    const halfN     = (N / 2) | 0;
+    const tauMin    = Math.max(2, Math.floor(sampleRate / maxHz));
+    const tauMax    = Math.min(halfN - 1, Math.floor(sampleRate / minHz));
+
+    // Difference function d(τ).
+    const d = new Float32Array(halfN);
+    for (let tau = 1; tau < halfN; tau++) {
+      let sum = 0;
+      for (let i = 0; i < halfN; i++) {
+        const diff = buf[i] - buf[i + tau];
+        sum += diff * diff;
+      }
+      d[tau] = sum;
+    }
+    // Cumulative mean normalized difference (CMND).
+    const cmnd = new Float32Array(halfN);
+    cmnd[0] = 1;
+    let running = 0;
+    for (let tau = 1; tau < halfN; tau++) {
+      running += d[tau];
+      cmnd[tau] = (d[tau] * tau) / (running || 1);
+    }
+
+    // Absolute threshold — first τ where CMND drops below threshold AND
+    // is a local minimum.
+    let tauEstimate = -1;
+    for (let tau = tauMin; tau <= tauMax; tau++) {
+      if (cmnd[tau] < threshold) {
+        while (tau + 1 <= tauMax && cmnd[tau + 1] < cmnd[tau]) tau++;
+        tauEstimate = tau;
+        break;
+      }
+    }
+    if (tauEstimate < 0) return null;
+
+    // Parabolic interpolation around the minimum for sub-sample τ.
+    let betterTau = tauEstimate;
+    if (tauEstimate > 0 && tauEstimate < halfN - 1) {
+      const s0 = cmnd[tauEstimate - 1];
+      const s1 = cmnd[tauEstimate];
+      const s2 = cmnd[tauEstimate + 1];
+      const denom = 2 * (s0 - 2 * s1 + s2);
+      if (denom !== 0) {
+        betterTau = tauEstimate + (s0 - s2) / denom;
+      }
+    }
+
+    const freqHz = sampleRate / betterTau;
+    if (freqHz < minHz || freqHz > maxHz) return null;
+    // Confidence = 1 - CMND at the chosen τ, clamped.
+    const conf = Math.max(0, Math.min(1, 1 - cmnd[tauEstimate]));
+    return { freqHz, confidence: conf };
+  }
+
+  // ── scoring.createContinuous ──────────────────────────────────────────
+  // Self-contained (does not use createNoteDetector). Opens its own
+  // getUserMedia stream and runs YIN on a 2048-sample window. Emits
+  // 'pitch' events with { freqHz, midiFloat, cents, confidence, tMs,
+  // expectedBaseFreqHz }. `cents` is relative to expectedBaseFreqHz if
+  // provided, otherwise relative to freqHz itself (so always 0).
+  function createContinuous(opts) {
+    const expectedBaseFreqHz = opts && opts.expectedBaseFreqHz || null;
+    const smoothingMs        = (opts && opts.smoothingMs) || 30;
+    const handlers = { pitch: [], end: [] };
+    let audioCtx    = null;
+    let mediaStream = null;
+    let source      = null;
+    let processor   = null;
+    let stopped     = false;
+    let lastFreq    = 0;
+    let lastConf    = 0;
+    const ringSize  = 2048;
+    const ring      = new Float32Array(ringSize);
+    let ringWrite   = 0;
+
+    const handle = {
+      on(event, cb) { (handlers[event] || (handlers[event] = [])).push(cb); return handle; },
+      stop,
+      isRunning: () => !stopped && !!audioCtx,
+    };
+
+    function emit(event, payload) {
+      (handlers[event] || []).forEach(cb => { try { cb(payload); } catch (e) { console.error(e); } });
+    }
+
+    async function start() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+          video: false,
+        });
+        if (stopped) {
+          stream.getTracks().forEach(t => t.stop());
+          return;
+        }
+        mediaStream = stream;
+        const AC = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AC();
+        source = audioCtx.createMediaStreamSource(stream);
+        // ScriptProcessor is deprecated but universally supported and lets
+        // us pull raw frames synchronously — fine for v1. Migration to
+        // AudioWorklet is straightforward later.
+        const bufSize = 1024;
+        processor = audioCtx.createScriptProcessor(bufSize, 1, 1);
+        processor.onaudioprocess = (e) => {
+          const inBuf = e.inputBuffer.getChannelData(0);
+          // Copy into ring.
+          for (let i = 0; i < inBuf.length; i++) {
+            ring[ringWrite] = inBuf[i];
+            ringWrite = (ringWrite + 1) % ringSize;
+          }
+          // Build a contiguous window for YIN: from oldest sample to newest.
+          const window_ = new Float32Array(ringSize);
+          for (let i = 0; i < ringSize; i++) {
+            window_[i] = ring[(ringWrite + i) % ringSize];
+          }
+          const res = yinDetect(window_, audioCtx.sampleRate, { minHz: 70, maxHz: 1500 });
+          const nowMs = performance.now();
+          if (res && res.confidence > 0.3) {
+            // EMA smoothing in log-freq space.
+            const alpha = Math.min(1, (bufSize / audioCtx.sampleRate * 1000) / smoothingMs);
+            if (lastFreq > 0) {
+              lastFreq = Math.exp(Math.log(lastFreq) * (1 - alpha) + Math.log(res.freqHz) * alpha);
+            } else {
+              lastFreq = res.freqHz;
+            }
+            lastConf = res.confidence;
+          } else {
+            // Fade confidence rather than zeroing — lets the consumer
+            // gate "no input" on confidence falling below its own threshold.
+            lastConf *= 0.85;
+          }
+          const freq = lastFreq;
+          const midiFloat = freq > 0 ? 69 + 12 * Math.log2(freq / 440) : 0;
+          const cents = (expectedBaseFreqHz && freq > 0)
+            ? 1200 * Math.log2(freq / expectedBaseFreqHz)
+            : 0;
+          emit('pitch', {
+            freqHz: freq,
+            midiFloat,
+            cents,
+            confidence: lastConf,
+            tMs: nowMs,
+            expectedBaseFreqHz,
+          });
+        };
+        source.connect(processor);
+        // Must connect processor → destination for onaudioprocess to fire.
+        // Route through a muted gain node so we don't actually output mic.
+        const mute = audioCtx.createGain();
+        mute.gain.value = 0;
+        processor.connect(mute);
+        mute.connect(audioCtx.destination);
+      } catch (err) {
+        console.error('[minigames] continuous scoring failed to start:', err);
+        emit('end', { reason: 'error', error: err });
+        stop();
+      }
+    }
+
+    function stop() {
+      if (stopped) return;
+      stopped = true;
+      try { if (processor) processor.disconnect(); } catch (e) {}
+      try { if (source) source.disconnect(); } catch (e) {}
+      try { if (mediaStream) mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+      try { if (audioCtx) audioCtx.close(); } catch (e) {}
+      audioCtx = mediaStream = source = processor = null;
+      emit('end', { reason: 'stopped' });
+    }
+
+    start();
+    return handle;
+  }
+
+  // ── scoring.createDiscrete / createChord ──────────────────────────────
+  // Both wrap window.createNoteDetector from slopsmith-plugin-notedetect.
+  // For v1 they are thin event re-emitters — minigames using them must
+  // run alongside a chart (createNoteDetector needs a highway). Chart-free
+  // discrete scoring is out of scope until the scoring-core extraction
+  // PR lands.
+  function _wrapNoteDetector(opts) {
+    const handlers = { hit: [], miss: [], end: [] };
+    const fn = window.createNoteDetector;
+    if (typeof fn !== 'function') {
+      console.warn('[minigames] window.createNoteDetector unavailable — install slopsmith-plugin-notedetect for discrete/chord scoring.');
+      return {
+        on(event, cb) { (handlers[event] || (handlers[event] = [])).push(cb); return this; },
+        stop() { handlers.end.forEach(cb => cb({ reason: 'unavailable' })); },
+        isRunning: () => false,
+      };
+    }
+    const inst = fn(opts || {});
+    const root = (typeof inst.getRoot === 'function') ? inst.getRoot() : window;
+    const onHit  = (e) => handlers.hit.forEach(cb => cb(e.detail));
+    const onMiss = (e) => handlers.miss.forEach(cb => cb(e.detail));
+    root.addEventListener('notedetect:hit', onHit);
+    root.addEventListener('notedetect:miss', onMiss);
+    let stopped = false;
+    if (typeof inst.enable === 'function') {
+      try { inst.enable(); } catch (e) { console.error(e); }
+    }
+    return {
+      on(event, cb) { (handlers[event] || (handlers[event] = [])).push(cb); return this; },
+      stop() {
+        if (stopped) return;
+        stopped = true;
+        root.removeEventListener('notedetect:hit', onHit);
+        root.removeEventListener('notedetect:miss', onMiss);
+        try { inst.destroy && inst.destroy(); } catch (e) {}
+        handlers.end.forEach(cb => cb({ reason: 'stopped' }));
+      },
+      isRunning: () => !stopped,
+      noteDetector: inst,
+    };
+  }
+
+  // ── UI helpers ────────────────────────────────────────────────────────
+  function mountHUD(content) {
+    const hud = document.getElementById('mg-stage-hud');
+    if (!hud) return;
+    if (content instanceof Node) {
+      hud.innerHTML = '';
+      hud.appendChild(content);
+    } else if (typeof content === 'string') {
+      hud.innerHTML = content;
+    }
+  }
+
+  function runSummary(result) {
+    const root = document.getElementById('mg-summary');
+    if (!root) return;
+    const spec = registered.get(result.gameId);
+    document.getElementById('mg-summary-game').textContent =
+      spec ? spec.title || spec.id : (result.gameId || '');
+    document.getElementById('mg-summary-score').textContent = String(result.score | 0);
+    document.getElementById('mg-summary-xp').textContent    = '+' + String(result.xpGained | 0);
+    document.getElementById('mg-summary-best').textContent  = String(result.best | 0);
+
+    const extra = document.getElementById('mg-summary-extra');
+    if (result.extra) {
+      extra.innerHTML = result.extra;
+    } else {
+      extra.textContent = '';
+    }
+
+    root.classList.remove('hidden');
+    document.getElementById('mg-summary-close').onclick = () => {
+      root.classList.add('hidden');
+      // Re-render hub so updated XP / best appears.
+      renderHub();
+    };
+    document.getElementById('mg-summary-again').onclick = () => {
+      root.classList.add('hidden');
+      if (spec) start(spec.id, result.lastOpts || {});
+      else renderHub();
+    };
+  }
+
+  // Modifier picker — modal with one row per modifier from the spec.
+  // Returns a Promise that resolves to {modifiers} or rejects on cancel.
+  function modifierPicker(spec) {
+    return new Promise((resolve, reject) => {
+      const root = document.getElementById('mg-picker');
+      if (!root) { reject(new Error('picker DOM missing')); return; }
+      document.getElementById('mg-picker-title').textContent = spec.title || spec.id;
+      document.getElementById('mg-picker-tagline').textContent = spec.tagline || '';
+      const body = document.getElementById('mg-picker-body');
+      body.innerHTML = '';
+
+      const selected = {};
+      (spec.modifiers || []).forEach(mod => {
+        selected[mod.id] = mod.default;
+        const row = document.createElement('div');
+        row.innerHTML = `
+          <div class="text-xs uppercase tracking-widest text-gray-500 mb-2">${escapeHtml(mod.label || mod.id)}</div>
+          <div class="flex gap-2 flex-wrap" data-mod-id="${escapeHtml(mod.id)}"></div>
+        `;
+        const btnRow = row.querySelector('[data-mod-id]');
+        (mod.values || []).forEach(v => {
+          const btn = document.createElement('button');
+          btn.className = 'px-3 py-1.5 rounded text-sm bg-dark-700 text-gray-200 hover:bg-dark-600';
+          btn.textContent = String(v);
+          btn.dataset.value = String(v);
+          if (v === mod.default) btn.classList.add('!bg-accent', '!text-white');
+          btn.onclick = () => {
+            selected[mod.id] = v;
+            btnRow.querySelectorAll('button').forEach(b => b.classList.remove('!bg-accent', '!text-white'));
+            btn.classList.add('!bg-accent', '!text-white');
+          };
+          btnRow.appendChild(btn);
+        });
+        body.appendChild(row);
+      });
+
+      // Track selector for chart-free games that ship tracks.
+      if (Array.isArray(spec.availableTracks) && spec.availableTracks.length) {
+        selected.track = spec.availableTracks[0].id;
+        const row = document.createElement('div');
+        row.innerHTML = `
+          <div class="text-xs uppercase tracking-widest text-gray-500 mb-2">Track</div>
+          <div class="flex gap-2 flex-wrap" data-mod-id="__track"></div>
+        `;
+        const btnRow = row.querySelector('[data-mod-id]');
+        spec.availableTracks.forEach((t, i) => {
+          const btn = document.createElement('button');
+          btn.className = 'px-3 py-1.5 rounded text-sm bg-dark-700 text-gray-200 hover:bg-dark-600';
+          btn.textContent = t.title || t.id;
+          if (i === 0) btn.classList.add('!bg-accent', '!text-white');
+          btn.onclick = () => {
+            selected.track = t.id;
+            btnRow.querySelectorAll('button').forEach(b => b.classList.remove('!bg-accent', '!text-white'));
+            btn.classList.add('!bg-accent', '!text-white');
+          };
+          btnRow.appendChild(btn);
+        });
+        body.appendChild(row);
+      }
+
+      root.classList.remove('hidden');
+      const cleanup = () => { root.classList.add('hidden'); };
+      document.getElementById('mg-picker-cancel').onclick = () => { cleanup(); reject(new Error('cancelled')); };
+      document.getElementById('mg-picker-start').onclick  = () => { cleanup(); resolve({ modifiers: selected }); };
+    });
+  }
+
+  // ── Persistence client ────────────────────────────────────────────────
+  async function submitRun(payload) {
+    const r = await fetch(`${API_BASE}/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error(`submitRun failed: ${r.status}`);
+    return r.json();
+  }
+  async function getLeaderboard(gameId, opts) {
+    const params = new URLSearchParams();
+    if (gameId) params.set('game_id', gameId);
+    if (opts && opts.scope) params.set('scope', opts.scope);
+    if (opts && opts.limit) params.set('limit', String(opts.limit));
+    const r = await fetch(`${API_BASE}/runs?${params}`);
+    if (!r.ok) throw new Error(`getLeaderboard failed: ${r.status}`);
+    return r.json();
+  }
+  async function getProfile() {
+    const r = await fetch(`${API_BASE}/profile`);
+    if (!r.ok) throw new Error(`getProfile failed: ${r.status}`);
+    return r.json();
+  }
+  async function resetProfile() {
+    const r = await fetch(`${API_BASE}/profile/reset`, { method: 'POST' });
+    if (!r.ok) throw new Error(`resetProfile failed: ${r.status}`);
+    return r.json();
+  }
+  async function getServerRegistry() {
+    const r = await fetch(`${API_BASE}/registry`);
+    if (!r.ok) throw new Error(`registry failed: ${r.status}`);
+    return r.json();
+  }
+
+  // ── Scheduler (AudioContext-relative would be ideal; v1 uses perf.now) ─
+  const _timers = new Set();
+  const scheduler = {
+    every(ms, cb) {
+      const id = setInterval(cb, ms);
+      _timers.add(id);
+      return id;
+    },
+    in(ms, cb) {
+      const id = setTimeout(() => { _timers.delete(id); cb(); }, ms);
+      _timers.add(id);
+      return id;
+    },
+    cancel(id) {
+      clearTimeout(id);
+      clearInterval(id);
+      _timers.delete(id);
+    },
+    now: () => performance.now(),
+  };
+
+  // ── Registry ──────────────────────────────────────────────────────────
+  const registered = new Map();
+  function register(spec) {
+    if (!spec || !spec.id) {
+      console.warn('[minigames] register() called without a spec.id');
+      return;
+    }
+    registered.set(spec.id, spec);
+    // If the hub is mounted, re-render. Otherwise it'll pick this up on next mount.
+    if (document.getElementById('mg-grid')) renderHub();
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────
+  let active = null;       // { spec, modifiers, startedAt }
+
+  async function start(gameId, opts) {
+    const spec = registered.get(gameId);
+    if (!spec) { console.warn('[minigames] no such minigame:', gameId); return; }
+
+    let modifiers = opts && opts.modifiers;
+    if (!modifiers) {
+      // Build a picker config from the server-side manifest entry (which
+      // includes modifiers + unlocks) merged with anything the JS spec added.
+      const reg = await getServerRegistry().catch(() => ({ minigames: [] }));
+      const manifestSpec = (reg.minigames || []).find(m => m.plugin_id === gameId) || {};
+      const tracks = spec.availableTracks || manifestSpec.availableTracks || null;
+      try {
+        const pick = await modifierPicker({
+          id:               gameId,
+          title:            manifestSpec.title || spec.title || gameId,
+          tagline:          manifestSpec.tagline || spec.tagline || '',
+          modifiers:        manifestSpec.modifiers || spec.modifiers || [],
+          availableTracks:  tracks,
+        });
+        modifiers = pick.modifiers;
+      } catch (e) {
+        return; // cancelled
+      }
+    }
+
+    // Show the stage chrome.
+    const stage = document.getElementById('mg-stage');
+    const body  = document.getElementById('mg-stage-body');
+    const title = document.getElementById('mg-stage-title');
+    const instr = document.getElementById('mg-stage-instrument');
+    const quit  = document.getElementById('mg-stage-quit');
+    stage.classList.remove('hidden');
+    body.innerHTML = '';
+    title.textContent = spec.title || spec.id;
+    instr.textContent = '';
+    mountHUD('');
+
+    const container = document.createElement('div');
+    container.className = 'mg-game-root';
+    body.appendChild(container);
+
+    active = { spec, modifiers, startedAt: performance.now(), lastOpts: { modifiers } };
+    quit.onclick = () => end({ score: 0, durationMs: 0, modifiers, meta: { reason: 'quit' } });
+
+    try {
+      await spec.start({
+        container,
+        modifiers,
+        // Convenience pass-through for the SDK so games don't have to
+        // touch window.slopsmithMinigames inside their start handler.
+        sdk: window.slopsmithMinigames,
+      });
+    } catch (e) {
+      console.error('[minigames] minigame start() threw:', e);
+      await end({ score: 0, durationMs: 0, modifiers, meta: { reason: 'error', error: String(e) } });
+    }
+  }
+
+  async function end(result) {
+    if (!active) return;
+    const { spec, modifiers, startedAt, lastOpts } = active;
+    active = null;
+
+    // Let the game tear itself down first.
+    try { await spec.stop && spec.stop(); } catch (e) { console.error(e); }
+    // Also stop any timers started via scheduler.
+    _timers.forEach(t => { clearTimeout(t); clearInterval(t); });
+    _timers.clear();
+
+    const durationMs = Math.max(0, result.durationMs || Math.round(performance.now() - startedAt));
+    const score      = Math.max(0, result.score | 0);
+    const meta       = result.meta || {};
+
+    document.getElementById('mg-stage').classList.add('hidden');
+    document.getElementById('mg-stage-body').innerHTML = '';
+
+    let xpGained = 0;
+    let best = 0;
+    try {
+      const submitted = await submitRun({
+        game_id:     spec.id,
+        score,
+        duration_ms: durationMs,
+        modifiers,
+        meta,
+      });
+      xpGained = submitted.xp_gained;
+      // Best score: fetch leaderboard top entry.
+      const lb = await getLeaderboard(spec.id, { limit: 1 });
+      best = (lb.runs && lb.runs[0] && lb.runs[0].score) || score;
+    } catch (e) {
+      console.error('[minigames] run submission failed:', e);
+    }
+
+    runSummary({
+      gameId:   spec.id,
+      score,
+      xpGained,
+      best,
+      extra:    result.summaryHtml || '',
+      lastOpts,
+    });
+    // Refresh profile strip.
+    renderProfileStrip().catch(() => {});
+  }
+
+  // ── Hub controller ────────────────────────────────────────────────────
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // Serialise hub renders. Concurrent calls were causing duplicate tiles
+  // because each call ran `grid.innerHTML = ''` then awaited a fetch then
+  // appended its tile, and the async gap let other in-flight renders also
+  // clear-then-append, multiplying the tile count by the number of races.
+  // We let at most one render run at a time and coalesce trailing calls
+  // into a single follow-up.
+  let _hubRenderInFlight = false;
+  let _hubRenderQueued   = false;
+  async function renderHub() {
+    if (_hubRenderInFlight) { _hubRenderQueued = true; return; }
+    _hubRenderInFlight = true;
+    try {
+      await _renderHubOnce();
+    } finally {
+      _hubRenderInFlight = false;
+      if (_hubRenderQueued) {
+        _hubRenderQueued = false;
+        renderHub();
+      }
+    }
+  }
+
+  async function _renderHubOnce() {
+    await renderProfileStrip().catch(() => {});
+
+    const grid  = document.getElementById('mg-grid');
+    const empty = document.getElementById('mg-empty');
+    if (!grid || !empty) return;
+
+    // Fetch per-game bests BEFORE we touch the DOM so the clear-and-append
+    // is fully synchronous from the browser's POV (no chance of another
+    // render slipping in mid-rebuild).
+    const profileResp = await getProfile().catch(() => ({}));
+    const perGame = (profileResp.totals && profileResp.totals.per_game) || {};
+
+    const list = Array.from(registered.values());
+    grid.innerHTML = '';
+    if (!list.length) {
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+
+    list.forEach(spec => {
+      const tile = document.createElement('div');
+      // Reuse the library's .song-card class so minigame tiles look
+      // identical to song cards (square art on top, text block below,
+      // matching hover/focus behaviour).
+      tile.className = 'song-card';
+      tile.tabIndex  = 0;
+      const stats = perGame[spec.id] || { runs: 0, best_score: 0 };
+      // Thumbnails are served via the minigame plugin's own asset route
+      // (the Slopsmith plugin loader only serves manifest-declared files,
+      // so each minigame that ships extra assets must expose /assets/).
+      const art = spec.thumbnail
+        ? `<div class="card-art"><img src="/api/plugins/${escapeHtml(spec.id)}/assets/${escapeHtml(spec.thumbnail)}" alt="${escapeHtml(spec.title || spec.id)}"></div>`
+        : `<div class="card-art"><span class="placeholder">🎮</span></div>`;
+      tile.innerHTML = `
+        ${art}
+        <div class="p-4">
+          <div class="font-semibold text-white truncate">${escapeHtml(spec.title || spec.id)}</div>
+          <div class="text-sm text-gray-400 mt-0.5 line-clamp-2 min-h-[2.5em]">${escapeHtml(spec.tagline || '')}</div>
+          <div class="mt-3 flex items-center justify-between text-xs text-gray-500">
+            <span>Runs <b class="text-gray-300">${stats.runs}</b></span>
+            <span>Best <b class="text-gray-300">${stats.best_score}</b></span>
+          </div>
+        </div>
+      `;
+      tile.onclick = () => start(spec.id);
+      tile.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          start(spec.id);
+        }
+      });
+      grid.appendChild(tile);
+    });
+  }
+
+  async function renderProfileStrip() {
+    const lvl  = document.getElementById('mg-profile-level');
+    const xp   = document.getElementById('mg-profile-xp');
+    const next = document.getElementById('mg-profile-next');
+    const bar  = document.getElementById('mg-profile-bar');
+    if (!lvl || !xp || !bar) return;
+    const p = await getProfile();
+    lvl.textContent  = String(p.level || 1);
+    xp.textContent   = `${p.xp || 0} XP`;
+    next.textContent = p.xp_to_next_level != null ? `${p.xp_to_next_level} to next` : '';
+    const lo = ((p.level || 1) - 1) ** 2 * 100;
+    const hi = (p.level || 1) ** 2 * 100;
+    const pct = Math.max(0, Math.min(100, ((p.xp - lo) / Math.max(1, hi - lo)) * 100));
+    bar.style.width = pct + '%';
+  }
+
+  // ── SDK object ────────────────────────────────────────────────────────
+  const sdk = {
+    __alive: true,
+    register,
+    start,
+    end,
+    scoring: {
+      createContinuous,
+      createDiscrete: (opts) => _wrapNoteDetector(opts),
+      createChord:    (opts) => _wrapNoteDetector(opts),
+    },
+    ui: { mountHUD, runSummary, modifierPicker },
+    submitRun,
+    getLeaderboard,
+    getProfile,
+    resetProfile,
+    scheduler,
+    // Read-only access to the registry for the hub-from-anywhere case.
+    listRegistered: () => Array.from(registered.values()),
+  };
+
+  window.slopsmithMinigames = sdk;
+  // Drain queue of plugins that loaded before us.
+  (window.__slopsmithMinigamesPending || []).forEach(register);
+  window.__slopsmithMinigamesPending = null;
+  window.dispatchEvent(new CustomEvent('slopsmith-minigames-ready'));
+
+  // ── Wire hub render to screen lifecycle ───────────────────────────────
+  // Slopsmith mounts plugin screens with id "plugin-<plugin_id>" and
+  // routes there via showScreen() / window.slopsmith.navigate().
+  const SCREEN_ID = `plugin-${PLUGIN_ID}`;
+  if (window.slopsmith && typeof window.slopsmith.on === 'function') {
+    window.slopsmith.on('screen:changed', (e) => {
+      const id = e && e.detail && e.detail.id;
+      if (id === SCREEN_ID) renderHub();
+    });
+  }
+  // Initial render in case the DOM is already mounted (hot reload / direct load).
+  if (document.getElementById('mg-grid')) {
+    renderHub();
+  }
+
+  // ── Inject a top-level nav link (not the plugin dropdown) ─────────────
+  // The user wants Minigames alongside Library / Favorites / Upload /
+  // Settings — not buried in the "Plugins" dropdown. We removed `nav`
+  // from plugin.json so the auto-injected dropdown item is gone; this
+  // block adds a top-level link instead, and is idempotent so plugin
+  // reloads or hot-refreshes don't double-add.
+  function installNavLink() {
+    if (document.getElementById('mg-nav-link-desktop')) return; // idempotent
+    // Desktop: insert just before the plugin dropdown span (so the visual
+    // order is Library / Favorites / Upload / Minigames / [Plugins…] /
+    // Settings). Mobile: insert just before the mobile plugin block.
+    const pluginsAnchor = document.getElementById('nav-plugins');
+    if (pluginsAnchor && pluginsAnchor.parentElement) {
+      const a = document.createElement('a');
+      a.id = 'mg-nav-link-desktop';
+      a.href = '#';
+      a.className = 'text-sm text-gray-400 hover:text-white transition';
+      a.textContent = 'Minigames';
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (window.slopsmith && typeof window.slopsmith.navigate === 'function') {
+          window.slopsmith.navigate(SCREEN_ID);
+        } else if (typeof window.showScreen === 'function') {
+          window.showScreen(SCREEN_ID);
+        }
+      });
+      pluginsAnchor.parentElement.insertBefore(a, pluginsAnchor);
+    }
+    const mobileAnchor = document.getElementById('mobile-nav-plugins');
+    if (mobileAnchor && mobileAnchor.parentElement && !document.getElementById('mg-nav-link-mobile')) {
+      const m = document.createElement('a');
+      m.id = 'mg-nav-link-mobile';
+      m.href = '#';
+      m.className = 'text-gray-400 hover:text-white';
+      m.textContent = 'Minigames';
+      m.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (window.slopsmith && typeof window.slopsmith.navigate === 'function') {
+          window.slopsmith.navigate(SCREEN_ID);
+        }
+        m.closest('#mobile-menu')?.classList.add('hidden');
+      });
+      mobileAnchor.parentElement.insertBefore(m, mobileAnchor);
+    }
+  }
+  installNavLink();
+  // The slopsmith plugin loader rebuilds the dropdown when plugins
+  // hot-reload — re-install on a short delay then settle.
+  setTimeout(installNavLink, 250);
+  setTimeout(installNavLink, 1500);
+})();
