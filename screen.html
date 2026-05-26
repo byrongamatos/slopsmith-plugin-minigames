@@ -1,3 +1,13 @@
+<!-- Inline critical styles: the plugin loader does not inject style.css
+     automatically, so rules that can't be expressed as Tailwind classes
+     are inlined here to ensure they're applied when screen.html is
+     injected via innerHTML. -->
+<style>
+  #mg-stage-body > .mg-game-root { position: absolute; inset: 0; }
+  .mg-pitch-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: rgb(107 114 128); margin-right: 6px; vertical-align: middle; }
+  .mg-pitch-dot.live { background: rgb(74 222 128); box-shadow: 0 0 8px rgba(74,222,128,0.6); }
+</style>
+
 <div id="mg-root" class="max-w-5xl mx-auto px-6 pt-24 pb-16">
 
   <!-- Header + profile strip -->
