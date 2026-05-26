@@ -327,7 +327,7 @@ def setup(app, context):
                 except (TypeError, ValueError):
                     return default
 
-            profile["xp"] = _int(profile.get("xp"), 0) + xp_gained
+            profile["xp"] = max(0, _int(profile.get("xp"), 0) + xp_gained)
             profile["level"] = level_for_xp(profile["xp"])
 
             # Validate that totals / per_game / per-game entry are dicts; reset
@@ -437,7 +437,7 @@ def setup(app, context):
         # import.  Recompute level from coerced xp so the two are always in sync
         # (stale or wrong-type level in the file is ignored).
         try:
-            xp = int(profile.get("xp", 0))
+            xp = max(0, int(profile.get("xp", 0)))
         except (TypeError, ValueError):
             xp = 0
         level = level_for_xp(xp)
