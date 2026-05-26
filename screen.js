@@ -505,6 +505,10 @@
     const title = document.getElementById('mg-stage-title');
     const instr = document.getElementById('mg-stage-instrument');
     const quit  = document.getElementById('mg-stage-quit');
+    if (!stage || !body || !title || !instr || !quit) {
+      console.warn('[minigames] start(%s): stage DOM not mounted — cannot launch', gameId);
+      return;
+    }
     stage.classList.remove('hidden');
     body.innerHTML = '';
     title.textContent = spec.title || spec.id;
@@ -551,7 +555,12 @@
       ? Math.floor(_rawDur)
       : Math.round(performance.now() - startedAt);
     const score      = Math.max(0, Math.floor(Number(res.score) || 0));
-    const meta       = res.meta || {};
+    // Coerce meta to a plain object — the backend expects a JSON object/dict;
+    // a non-object (string, array, null) would cause a Pydantic 422.
+    const rawMeta = res.meta;
+    const meta    = (rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta))
+      ? rawMeta
+      : {};
 
     document.getElementById('mg-stage').classList.add('hidden');
     document.getElementById('mg-stage-body').innerHTML = '';
