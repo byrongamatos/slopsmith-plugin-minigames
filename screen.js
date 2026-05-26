@@ -539,7 +539,9 @@
     document.getElementById('mg-stage-body').innerHTML = '';
 
     let xpGained = 0;
-    let best = 0;
+    // Default best to this run's score so the summary shows a sensible value
+    // even if the server is unreachable or the leaderboard fetch fails.
+    let best = score;
     try {
       const submitted = await submitRun({
         game_id:     spec.id,
@@ -602,12 +604,20 @@
     const empty = document.getElementById('mg-empty');
     if (!grid || !empty) return;
 
-    // Fetch the profile once. Pass it to renderProfileStrip so the strip
-    // and the per-game stats share a single round-trip rather than each
-    // issuing their own GET /profile.
-    const profileResp = await getProfile().catch(() => ({}));
+    // Fetch profile and server registry together. Registry fields (title,
+    // tagline, thumbnail) take precedence over the JS-registered spec so
+    // minigames that only register the minimal lifecycle spec still render
+    // correctly — the canonical display metadata lives in plugin.json.
+    const [profileResp, registryResp] = await Promise.all([
+      getProfile().catch(() => ({})),
+      getServerRegistry().catch(() => ({ minigames: [] })),
+    ]);
     await renderProfileStrip(profileResp).catch(() => {});
     const perGame = (profileResp.totals && profileResp.totals.per_game) || {};
+
+    // Build a lookup from plugin_id → manifest entry for merging below.
+    const manifestByGame = {};
+    (registryResp.minigames || []).forEach(m => { manifestByGame[m.plugin_id] = m; });
 
     const list = Array.from(registered.values());
     grid.innerHTML = '';
@@ -618,6 +628,14 @@
     empty.classList.add('hidden');
 
     list.forEach(spec => {
+      // Merge manifest fields so display metadata from plugin.json takes
+      // precedence over anything in the JS registration (manifest is the
+      // authoritative source; JS spec is a runtime fallback).
+      const mSpec = manifestByGame[spec.id] || {};
+      const title     = mSpec.title     || spec.title     || spec.id;
+      const tagline   = mSpec.tagline   || spec.tagline   || '';
+      const thumbnail = mSpec.thumbnail || spec.thumbnail || null;
+
       const tile = document.createElement('div');
       // Reuse the library's .song-card class so minigame tiles look
       // identical to song cards (square art on top, text block below,
@@ -625,19 +643,19 @@
       tile.className = 'song-card';
       tile.tabIndex  = 0;
       tile.setAttribute('role', 'button');
-      tile.setAttribute('aria-label', spec.title || spec.id);
+      tile.setAttribute('aria-label', title);
       const stats = perGame[spec.id] || { runs: 0, best_score: 0 };
       // Thumbnails are served via the minigame plugin's own asset route
       // (the Slopsmith plugin loader only serves manifest-declared files,
       // so each minigame that ships extra assets must expose /assets/).
-      const art = spec.thumbnail
-        ? `<div class="card-art"><img src="/api/plugins/${encodeURIComponent(spec.id)}/assets/${encodeURIComponent(spec.thumbnail)}" alt="${escapeHtml(spec.title || spec.id)}"></div>`
+      const art = thumbnail
+        ? `<div class="card-art"><img src="/api/plugins/${encodeURIComponent(spec.id)}/assets/${encodeURIComponent(thumbnail)}" alt="${escapeHtml(title)}"></div>`
         : `<div class="card-art"><span class="placeholder">🎮</span></div>`;
       tile.innerHTML = `
         ${art}
         <div class="p-4">
-          <div class="font-semibold text-white truncate">${escapeHtml(spec.title || spec.id)}</div>
-          <div class="text-sm text-gray-400 mt-0.5 line-clamp-2 min-h-[2.5em]">${escapeHtml(spec.tagline || '')}</div>
+          <div class="font-semibold text-white truncate">${escapeHtml(title)}</div>
+          <div class="text-sm text-gray-400 mt-0.5 line-clamp-2 min-h-[2.5em]">${escapeHtml(tagline)}</div>
           <div class="mt-3 flex items-center justify-between text-xs text-gray-500">
             <span>Runs <b class="text-gray-300">${Number(stats.runs) || 0}</b></span>
             <span>Best <b class="text-gray-300">${Number(stats.best_score) || 0}</b></span>
