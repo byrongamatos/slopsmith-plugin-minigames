@@ -451,12 +451,6 @@ def setup(app, context):
     @app.post("/api/plugins/minigames/profile/reset")
     def reset_profile():
         with _lock:
-            conn = _get_conn()
-            try:
-                conn.execute("DELETE FROM runs")
-                conn.commit()
-            finally:
-                conn.close()
             fresh = {
                 "xp": 0,
                 "level": 1,
@@ -464,7 +458,41 @@ def setup(app, context):
                 "totals": {"runs": 0, "score": 0, "per_game": {}},
                 "created_at": int(time.time()),
             }
-            _save_profile(fresh)
+            path = _state["profile_path"]
+            if not path:
+                raise RuntimeError("minigames plugin not initialised")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Two-phase commit: stage the fresh profile to a temp file first,
+            # then wipe the DB, then rename the temp into place.
+            # Phase 1 failure → nothing changed (consistent).
+            # Phase 2 (DB delete) failure → temp file cleaned up, nothing
+            #   changed (consistent).
+            # Phase 3 (rename) failure → DB wiped but old profile survives;
+            #   runs are gone but profile still holds stale totals. This is
+            #   acceptable because os.replace is virtually atomic on POSIX and
+            #   the rename failure case requires a full filesystem error.
+            fd, tmp_name = tempfile.mkstemp(prefix=".profile-reset-", dir=str(path.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(fresh, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                # Phase 2: wipe run history.
+                conn = _get_conn()
+                try:
+                    conn.execute("DELETE FROM runs")
+                    conn.commit()
+                finally:
+                    conn.close()
+                # Phase 3: atomically install the fresh profile.
+                os.replace(tmp_name, path)
+                tmp_name = None  # consumed
+            finally:
+                if tmp_name is not None:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
         return {"ok": True}
 
     @app.get("/api/plugins/minigames/registry")
