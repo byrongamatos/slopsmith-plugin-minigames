@@ -26,7 +26,10 @@
   // electric-guitar pitch tracking down to ~80 Hz. Returns:
   //   { freqHz, confidence }   — confidence in [0, 1]
   // or null if no confident pitch was found in the buffer.
-  function yinDetect(buf, sampleRate, opts) {
+  // scratchD / scratchCmnd are optional preallocated Float32Arrays of length
+  // ≥ halfN. Pass them from the createContinuous closure to avoid per-callback
+  // allocations. If omitted, yinDetect allocates its own (slower but safe).
+  function yinDetect(buf, sampleRate, opts, scratchD, scratchCmnd) {
     const threshold = (opts && opts.threshold) || 0.15;
     const minHz     = (opts && opts.minHz)     || 70;
     const maxHz     = (opts && opts.maxHz)     || 1500;
@@ -35,8 +38,8 @@
     const tauMin    = Math.max(2, Math.floor(sampleRate / maxHz));
     const tauMax    = Math.min(halfN - 1, Math.floor(sampleRate / minHz));
 
-    // Difference function d(τ).
-    const d = new Float32Array(halfN);
+    // Difference function d(τ). Reuse scratch buffer if provided.
+    const d = (scratchD && scratchD.length >= halfN) ? scratchD : new Float32Array(halfN);
     for (let tau = 1; tau < halfN; tau++) {
       let sum = 0;
       for (let i = 0; i < halfN; i++) {
@@ -45,8 +48,8 @@
       }
       d[tau] = sum;
     }
-    // Cumulative mean normalized difference (CMND).
-    const cmnd = new Float32Array(halfN);
+    // Cumulative mean normalized difference (CMND). Reuse scratch buffer if provided.
+    const cmnd = (scratchCmnd && scratchCmnd.length >= halfN) ? scratchCmnd : new Float32Array(halfN);
     cmnd[0] = 1;
     let running = 0;
     for (let tau = 1; tau < halfN; tau++) {
@@ -105,9 +108,12 @@
     let startError  = null;
     const ringSize  = 2048;
     const ring      = new Float32Array(ringSize);
-    // Preallocated contiguous window for YIN — reused every audio callback
-    // to avoid per-callback GC pressure from repeated Float32Array allocs.
+    // Preallocated buffers for YIN — reused every audio callback to avoid
+    // per-callback GC pressure from Float32Array allocations inside yinDetect.
     const yinWindow = new Float32Array(ringSize);
+    const yinHalfN  = ringSize >> 1;          // 1024 — matches halfN in yinDetect
+    const yinD      = new Float32Array(yinHalfN);
+    const yinCmnd   = new Float32Array(yinHalfN);
     let ringWrite   = 0;
 
     const handle = {
@@ -151,7 +157,7 @@
           for (let i = 0; i < ringSize; i++) {
             yinWindow[i] = ring[(ringWrite + i) % ringSize];
           }
-          const res = yinDetect(yinWindow, audioCtx.sampleRate, { minHz: 70, maxHz: 1500 });
+          const res = yinDetect(yinWindow, audioCtx.sampleRate, { minHz: 70, maxHz: 1500 }, yinD, yinCmnd);
           const nowMs = performance.now();
           if (res && res.confidence > 0.3) {
             // EMA smoothing in log-freq space.
@@ -239,8 +245,8 @@
     }
     const inst = fn(opts || {});
     const root = (typeof inst.getRoot === 'function') ? inst.getRoot() : window;
-    const onHit  = (e) => handlers.hit.forEach(cb => cb(e.detail));
-    const onMiss = (e) => handlers.miss.forEach(cb => cb(e.detail));
+    const onHit  = (e) => handlers.hit.forEach(cb => { try { cb(e.detail); } catch (err) { console.error(err); } });
+    const onMiss = (e) => handlers.miss.forEach(cb => { try { cb(e.detail); } catch (err) { console.error(err); } });
     root.addEventListener('notedetect:hit', onHit);
     root.addEventListener('notedetect:miss', onMiss);
     let stopped = false;
@@ -449,7 +455,8 @@
     let modifiers = opts && opts.modifiers;
     if (!modifiers) {
       // Build a picker config from the server-side manifest entry (which
-      // includes modifiers + unlocks) merged with anything the JS spec added.
+      // includes modifiers + unlocks). Manifest fields take precedence;
+      // JS spec fields serve as fallback when the manifest omits them.
       const reg = await getServerRegistry().catch(() => ({ minigames: [] }));
       const manifestSpec = (reg.minigames || []).find(m => m.plugin_id === gameId) || {};
       const tracks = spec.availableTracks || manifestSpec.availableTracks || null;
