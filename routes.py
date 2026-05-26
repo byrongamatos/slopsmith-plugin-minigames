@@ -126,6 +126,8 @@ def _save_profile(profile: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(profile, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp_name, path)
     except Exception:
         try:
@@ -324,7 +326,24 @@ def setup(app, context):
                 p["plugin_id"]: p.get("unlocks", []) for p in installed.values()
             }
             profile["unlocks"] = _evaluate_unlocks(profile, manifest_unlocks)
-            _save_profile(profile)
+            try:
+                _save_profile(profile)
+            except Exception:
+                # Profile save failed (e.g. disk full). Roll back the run
+                # insert so the client can retry without double-awarding XP.
+                try:
+                    conn2 = _get_conn()
+                    try:
+                        conn2.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+                        conn2.commit()
+                    finally:
+                        conn2.close()
+                except Exception as del_err:
+                    _state["log"].error(
+                        "failed to roll back run %s after profile-save failure: %s",
+                        run_id, del_err,
+                    )
+                raise
 
         return {
             "ok": True,
@@ -360,6 +379,12 @@ def setup(app, context):
         finally:
             conn.close()
 
+        def _safe_loads(raw, default=None):
+            try:
+                return json.loads(raw or "{}")
+            except (ValueError, TypeError):
+                return default if default is not None else {}
+
         return {
             "runs": [
                 {
@@ -367,8 +392,8 @@ def setup(app, context):
                     "game_id":     r["game_id"],
                     "score":       r["score"],
                     "duration_ms": r["duration_ms"],
-                    "modifiers":   json.loads(r["modifiers"] or "{}"),
-                    "meta":        json.loads(r["meta"]      or "{}"),
+                    "modifiers":   _safe_loads(r["modifiers"]),
+                    "meta":        _safe_loads(r["meta"]),
                     "xp_awarded":  r["xp_awarded"],
                     "created_at":  r["created_at"],
                 }

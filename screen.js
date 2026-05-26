@@ -379,7 +379,11 @@
       root.classList.remove('hidden');
       const cleanup = () => { root.classList.add('hidden'); };
       document.getElementById('mg-picker-cancel').onclick = () => { cleanup(); reject(new Error('cancelled')); };
-      document.getElementById('mg-picker-start').onclick  = () => { cleanup(); resolve({ modifiers: selected }); };
+      // Spread null-proto `selected` into a plain {} before resolving so
+      // consumers receive a normal object (with hasOwnProperty etc.) while
+      // the null-proto storage still prevents prototype pollution during
+      // modifier-id assignment above.
+      document.getElementById('mg-picker-start').onclick  = () => { cleanup(); resolve({ modifiers: Object.assign({}, selected) }); };
     });
   }
 
