@@ -38,9 +38,11 @@
     const tauMin    = Math.max(2, Math.floor(sampleRate / maxHz));
     const tauMax    = Math.min(halfN - 1, Math.floor(sampleRate / minHz));
 
-    // Difference function d(τ). Reuse scratch buffer if provided.
+    // Difference function d(τ). Only compute up to tauMax — values beyond
+    // tauMax can never be selected, so computing them is wasteful O(N^2) work.
+    // Reuse scratch buffer if provided.
     const d = (scratchD && scratchD.length >= halfN) ? scratchD : new Float32Array(halfN);
-    for (let tau = 1; tau < halfN; tau++) {
+    for (let tau = 1; tau <= tauMax; tau++) {
       let sum = 0;
       for (let i = 0; i < halfN; i++) {
         const diff = buf[i] - buf[i + tau];
@@ -48,11 +50,12 @@
       }
       d[tau] = sum;
     }
-    // Cumulative mean normalized difference (CMND). Reuse scratch buffer if provided.
+    // Cumulative mean normalized difference (CMND). Only compute up to tauMax
+    // since the threshold search only reads cmnd[tauMin..tauMax]. Reuse scratch.
     const cmnd = (scratchCmnd && scratchCmnd.length >= halfN) ? scratchCmnd : new Float32Array(halfN);
     cmnd[0] = 1;
     let running = 0;
-    for (let tau = 1; tau < halfN; tau++) {
+    for (let tau = 1; tau <= tauMax; tau++) {
       running += d[tau];
       cmnd[tau] = (d[tau] * tau) / (running || 1);
     }
@@ -71,7 +74,7 @@
 
     // Parabolic interpolation around the minimum for sub-sample τ.
     let betterTau = tauEstimate;
-    if (tauEstimate > 0 && tauEstimate < halfN - 1) {
+    if (tauEstimate > 0 && tauEstimate < tauMax) {
       const s0 = cmnd[tauEstimate - 1];
       const s1 = cmnd[tauEstimate];
       const s2 = cmnd[tauEstimate + 1];
