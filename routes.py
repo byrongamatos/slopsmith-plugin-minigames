@@ -96,7 +96,13 @@ def _load_profile() -> dict:
     path = _state["profile_path"]
     if path and path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+            _state["log"].warning(
+                "profile.json contained %s instead of an object; recreating",
+                type(data).__name__,
+            )
         except Exception as e:
             _state["log"].warning("profile.json unreadable, recreating: %s", e)
     return {
@@ -132,7 +138,8 @@ def _save_profile(profile: dict) -> None:
 def _evaluate_unlocks(profile: dict, manifest_unlocks_by_game: dict) -> list:
     """Given current XP and per-game unlock definitions, return the new list
     of unlocked IDs (game-scoped to avoid collision: 'game_id:unlock_id')."""
-    earned = set(profile.get("unlocks", []))
+    raw_unlocks = profile.get("unlocks")
+    earned = set(raw_unlocks if isinstance(raw_unlocks, list) else [])
     xp = profile.get("xp", 0)
     for game_id, unlocks in manifest_unlocks_by_game.items():
         for u in unlocks or []:
