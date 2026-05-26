@@ -26,7 +26,7 @@
         await window.slopsmithMinigames.resetProfile();
         status.textContent = 'Profile reset.';
       } catch (e) {
-        status.textContent = 'Failed: ' + e.message;
+        status.textContent = 'Failed: ' + String(e?.message || e);
       }
     });
   })();

@@ -280,9 +280,9 @@
     const spec = registered.get(result.gameId);
     document.getElementById('mg-summary-game').textContent =
       spec ? spec.title || spec.id : (result.gameId || '');
-    document.getElementById('mg-summary-score').textContent = String(result.score | 0);
-    document.getElementById('mg-summary-xp').textContent    = '+' + String(result.xpGained | 0);
-    document.getElementById('mg-summary-best').textContent  = String(result.best | 0);
+    document.getElementById('mg-summary-score').textContent = String(Math.floor(Math.max(0, Number(result.score) || 0)));
+    document.getElementById('mg-summary-xp').textContent    = '+' + String(Math.floor(Math.max(0, Number(result.xpGained) || 0)));
+    document.getElementById('mg-summary-best').textContent  = String(Math.floor(Math.max(0, Number(result.best) || 0)));
 
     const extra = document.getElementById('mg-summary-extra');
     if (result.extra) {
@@ -511,8 +511,8 @@
     _timers.forEach(t => { clearTimeout(t); clearInterval(t); });
     _timers.clear();
 
-    const durationMs = Math.max(0, result.durationMs || Math.round(performance.now() - startedAt));
-    const score      = Math.max(0, result.score | 0);
+    const durationMs = Math.max(0, result.durationMs ?? Math.round(performance.now() - startedAt));
+    const score      = Math.max(0, Math.floor(Number(result.score) || 0));
     const meta       = result.meta || {};
 
     document.getElementById('mg-stage').classList.add('hidden');
@@ -619,8 +619,8 @@
           <div class="font-semibold text-white truncate">${escapeHtml(spec.title || spec.id)}</div>
           <div class="text-sm text-gray-400 mt-0.5 line-clamp-2 min-h-[2.5em]">${escapeHtml(spec.tagline || '')}</div>
           <div class="mt-3 flex items-center justify-between text-xs text-gray-500">
-            <span>Runs <b class="text-gray-300">${stats.runs}</b></span>
-            <span>Best <b class="text-gray-300">${stats.best_score}</b></span>
+            <span>Runs <b class="text-gray-300">${Number(stats.runs) || 0}</b></span>
+            <span>Best <b class="text-gray-300">${Number(stats.best_score) || 0}</b></span>
           </div>
         </div>
       `;
